@@ -1,0 +1,12 @@
+{
+  "name": "ku-grader-tool",
+  "version": "1.0.0",
+  "description": "A grading tool project",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["grading", "education", "aws"],
+  "author": "",
+  "license": "ISC"
+}
