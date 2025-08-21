@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
@@ -34,7 +35,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     Single Essay:
     {
         "student_id": "student123",
-        "content_id": "1",
+        "content_id": "Winter_Hibiscus_Grade10_20250812_180450",
         "essay_type": "Source Dependent Responses",
         "essay_response": "Student essay text here..."
     }
@@ -44,20 +45,20 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         "essays": [
             {
                 "student_id": "student123",
-                "content_id": "1",
+                "content_id": "Winter_Hibiscus_Grade10_20250812_180450",
                 "essay_type": "Source Dependent Responses",
                 "essay_response": "Student essay text here..."
             },
             {
                 "student_id": "student456",
-                "content_id": "2",
+                "content_id": "Persuasive_Essay_Grade11_20250815_120000",
                 "essay_type": "Argumentative Writing",
                 "essay_response": "Another student essay text here..."
             }
         ],
         "batch_id": "optional_batch_id",
         "s3_output_prefix": "optional/s3/prefix/",
-        "store_in_s3": true  // Optional, defaults to true for bulk
+        "store_in_s3": true
     }
     """
 
@@ -127,8 +128,8 @@ def process_single_essay(request_data: Dict[str, Any]) -> Dict[str, Any]:
         # Extract and validate input parameters
         input_data = extract_and_validate_input(request_data)
 
-        # Retrieve rubric from DynamoDB (with caching)
-        rubric_data = get_cached_rubric(input_data['essay_type'])
+        # Retrieve rubric from DynamoDB using essay_type and content_id as essay_id
+        rubric_data = get_cached_rubric(input_data['essay_type'], input_data.get('content_id'))
 
         # Grade the essay using Bedrock
         grading_result = grade_essay_with_bedrock(input_data, rubric_data)
@@ -141,6 +142,7 @@ def process_single_essay(request_data: Dict[str, Any]) -> Dict[str, Any]:
             'processing_status': 'completed',
             'student_id': input_data['student_id'],
             'essay_type': input_data['essay_type'],
+            'content_id_requested': input_data.get('content_id'),
             'result': essay_result
         }
 
@@ -182,21 +184,28 @@ def process_bulk_essays(request_data: Dict[str, Any], context) -> Dict[str, Any]
 
     logger.info(f"Validated {len(validated_essays)} essays, {len(validation_errors)} validation errors")
 
-    # Pre-load rubrics for all unique essay types
-    unique_essay_types = set(essay[1]['essay_type'] for essay in validated_essays)
-    logger.info(f"Unique essay types in batch: {list(unique_essay_types)}")
+    # Pre-load rubrics for all unique essay_type and content_id combinations
+    unique_rubric_combinations = set()
+    for essay_index, essay_data in validated_essays:
+        essay_type = essay_data['essay_type']
+        content_id = essay_data.get('content_id')
+        unique_rubric_combinations.add((essay_type, content_id))
+
+    logger.info(f"Unique rubric combinations in batch: {list(unique_rubric_combinations)}")
 
     rubric_load_errors = []
-    for essay_type in unique_essay_types:
+    for essay_type, content_id in unique_rubric_combinations:
         try:
-            get_cached_rubric(essay_type)
-            logger.info(f"Successfully cached rubric for: {essay_type}")
+            get_cached_rubric(essay_type, content_id)
+            cache_key = f"{essay_type}|{content_id if content_id else 'latest'}"
+            logger.info(f"Successfully cached rubric for: {cache_key}")
         except Exception as e:
             rubric_load_errors.append({
                 'essay_type': essay_type,
+                'content_id': content_id,
                 'error': str(e)
             })
-            logger.error(f"Failed to load rubric for {essay_type}: {str(e)}")
+            logger.error(f"Failed to load rubric for {essay_type}, content_id: {content_id}: {str(e)}")
 
     # Process essays in parallel with controlled concurrency
     max_concurrent_requests = min(5, len(validated_essays))
@@ -215,7 +224,7 @@ def process_bulk_essays(request_data: Dict[str, Any], context) -> Dict[str, Any]
         # Submit grading tasks for essays with valid rubrics
         future_to_essay = {}
         for essay_index, essay_data in validated_essays:
-            if essay_data['essay_type'] not in [error['essay_type'] for error in rubric_load_errors]:
+            if (essay_data['essay_type'], essay_data.get('content_id')) not in [(error['essay_type'], error.get('content_id')) for error in rubric_load_errors]:
                 future = executor.submit(grade_single_essay_safe, essay_index, essay_data)
                 future_to_essay[future] = (essay_index, essay_data)
 
@@ -243,6 +252,8 @@ def process_bulk_essays(request_data: Dict[str, Any], context) -> Dict[str, Any]
                 logger.error(f"Essay {essay_index} processing failed: {str(e)}")
 
     # Prepare batch response
+    unique_essay_types = list(set(essay[1]['essay_type'] for essay in validated_essays))
+
     batch_response = {
         'processing_mode': 'bulk',
         'batch_id': batch_id,
@@ -255,8 +266,8 @@ def process_bulk_essays(request_data: Dict[str, Any], context) -> Dict[str, Any]
             'total_rubric_load_errors': len(rubric_load_errors),
             'total_grading_errors': len(grading_errors)
         },
-        'unique_essay_types': list(unique_essay_types),
-        'results': grading_results,  # Include results in response
+        'unique_essay_types': unique_essay_types,
+        'results': grading_results,
         'errors': {
             'validation_errors': validation_errors,
             'rubric_load_errors': rubric_load_errors,
@@ -291,8 +302,8 @@ def grade_single_essay_safe(essay_index: int, essay_data: Dict[str, str]) -> Dic
     try:
         logger.info(f"Starting to grade essay {essay_index} for student {essay_data['student_id']}")
 
-        # Get rubric (should be cached)
-        rubric_data = get_cached_rubric(essay_data['essay_type'])
+        # Get rubric using essay_type and content_id (should be cached)
+        rubric_data = get_cached_rubric(essay_data['essay_type'], essay_data.get('content_id'))
 
         # Grade the essay
         grading_result = grade_essay_with_bedrock(essay_data, rubric_data)
@@ -315,16 +326,19 @@ def grade_single_essay_safe(essay_index: int, essay_data: Dict[str, str]) -> Dic
             'student_id': essay_data.get('student_id', 'unknown')
         }
 
-def get_cached_rubric(essay_type: str) -> Dict[str, Any]:
+def get_cached_rubric(essay_type: str, content_id: Optional[str] = None) -> Dict[str, Any]:
     """Get rubric with caching to avoid repeated DynamoDB calls"""
 
-    if essay_type in rubric_cache:
-        logger.info(f"Using cached rubric for essay type: {essay_type}")
-        return rubric_cache[essay_type]
+    # Create cache key that includes both essay_type and content_id
+    cache_key = f"{essay_type}|{content_id if content_id else 'latest'}"
 
-    logger.info(f"Loading rubric from DynamoDB for essay type: {essay_type}")
-    rubric_data = get_rubric_for_essay_type(essay_type)
-    rubric_cache[essay_type] = rubric_data
+    if cache_key in rubric_cache:
+        logger.info(f"Using cached rubric for cache key: {cache_key}")
+        return rubric_cache[cache_key]
+
+    logger.info(f"Loading rubric from DynamoDB for cache key: {cache_key}")
+    rubric_data = get_rubric_for_essay_type(essay_type, content_id)
+    rubric_cache[cache_key] = rubric_data
 
     return rubric_data
 
@@ -444,43 +458,79 @@ def extract_and_validate_input(event: Dict[str, Any]) -> Dict[str, str]:
         'essay_response': event['essay_response'].strip()
     }
 
-def get_rubric_for_essay_type(essay_type: str) -> Dict[str, Any]:
-    """Retrieve the most recent rubric for the given essay type"""
+def get_rubric_for_essay_type(essay_type: str, content_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Retrieve rubric for the given essay type and optionally specific content_id
+
+    Args:
+        essay_type (str): The type of essay (e.g., "Source Dependent Responses")
+        content_id (Optional[str]): Specific content_id to retrieve. If None, gets the most recent rubric.
+
+    Returns:
+        Dict[str, Any]: The rubric data
+    """
 
     try:
-        logger.info(f"Querying rubrics for essay type: {essay_type}")
+        if content_id:
+            logger.info(f"Querying rubrics for essay type: {essay_type} and content_id: {content_id}")
 
-        # Query DynamoDB for rubrics of this essay type
-        response = rubrics_table.query(
-            KeyConditionExpression=Key('essay_type').eq(essay_type),
-            ScanIndexForward=False,  # Get newest first
-            Limit=1
-        )
+            # filter_expr = Attr('essay_id').eq(content_id)
 
-        # LOG THE RAW DYNAMODB RESPONSE
-        logger.info("=== RAW DYNAMODB RESPONSE ===")
-        logger.info(f"DynamoDB response: {json.dumps(response, default=str, indent=2)}")
-        logger.info(f"Items count: {len(response.get('Items', []))}")
+            # Query DynamoDB for specific essay_type and essay_id (using content_id value)
+            response = rubrics_table.query(
+                KeyConditionExpression=Key('essay_type').eq(essay_type) & Key('essay_id').eq(content_id),
+                # FilterExpression=filter_expr,
+                # FilterExpression=Attr('essay_id.S').eq(content_id),
+                Limit=1
+            )
 
-        if not response['Items']:
-            raise ValueError(f"No rubric found for essay type: {essay_type}")
+            logger.info("=== RAW DYNAMODB RESPONSE (with content_id filter) ===")
+            logger.info(f"DynamoDB response: {json.dumps(response, default=str, indent=2)}")
+            logger.info(f"Items count: {len(response.get('Items', []))}")
+
+            if not response['Items']:
+                logger.warning(f"No rubric found for essay type: {essay_type} and content_id: {content_id}")
+                logger.info(f"Falling back to most recent rubric for essay type: {essay_type}")
+
+                # Fallback to most recent rubric for this essay_type
+                response = rubrics_table.query(
+                    KeyConditionExpression=Key('essay_type').eq(essay_type),
+                    ScanIndexForward=False,  # Get newest first
+                    Limit=1
+                )
+
+                if not response['Items']:
+                    raise ValueError(f"No rubric found for essay type: {essay_type} (even with fallback)")
+
+        else:
+            logger.info(f"Querying rubrics for essay type: {essay_type} (most recent)")
+
+            # Query DynamoDB for rubrics of this essay type (most recent)
+            response = rubrics_table.query(
+                KeyConditionExpression=Key('essay_type').eq(essay_type),
+                ScanIndexForward=False,  # Get newest first
+                Limit=1
+            )
+
+            if not response['Items']:
+                raise ValueError(f"No rubric found for essay type: {essay_type}")
 
         rubric = response['Items'][0]
 
-        # LOG THE RETRIEVED RUBRIC IN DETAIL
-        logger.info("=== RETRIEVED RUBRIC DETAILED ANALYSIS ===")
-        logger.info(f"Rubric essay_id: {rubric.get('essay_id', 'NOT_FOUND')}")
-        logger.info(f"Rubric keys: {list(rubric.keys())}")
+        # Validate that this is the correct rubric
+        rubric_essay_id = rubric.get('essay_id', '')
+        if isinstance(rubric_essay_id, dict) and 'S' in rubric_essay_id:
+            rubric_essay_id = rubric_essay_id['S']
 
-        # Log each top-level key and its type/structure
-        for key, value in rubric.items():
-            logger.info(f"Key '{key}': type={type(value)}, value_preview={str(value)[:200]}...")
+        if content_id and rubric_essay_id != content_id:
+            logger.warning(f"Retrieved rubric essay_id '{rubric_essay_id}' does not match requested content_id '{content_id}'")
 
+        logger.info(f"Successfully retrieved rubric with essay_id: {rubric_essay_id}")
         return rubric
 
     except Exception as e:
         logger.error(f"Error retrieving rubric: {str(e)}")
-        raise ValueError(f"Failed to retrieve rubric for essay type '{essay_type}': {str(e)}")
+        raise ValueError(f"Failed to retrieve rubric for essay type '{essay_type}'{f' and content_id {content_id}' if content_id else ''}: {str(e)}")
 
 def grade_essay_with_bedrock(input_data: Dict[str, str], rubric_data: Dict[str, Any]) -> Dict[str, Any]:
     """Use Bedrock to grade the essay based on the rubric"""
@@ -528,6 +578,52 @@ def grade_essay_with_bedrock(input_data: Dict[str, str], rubric_data: Dict[str, 
         logger.error(f"Error calling Bedrock for grading: {str(e)}")
         raise
 
+def parse_score_range(score_range_raw) -> tuple[int, int]:
+    """Parse score range string to extract min and max scores"""
+
+    # Handle DynamoDB format first
+    if isinstance(score_range_raw, dict) and 'S' in score_range_raw:
+        score_range_str = score_range_raw['S']
+    elif isinstance(score_range_raw, str):
+        score_range_str = score_range_raw
+    else:
+        logger.warning(f"Unexpected score_range format: {score_range_raw}, using default 0-3")
+        return 0, 3
+
+    # Clean the string
+    score_range_str = score_range_str.strip()
+
+    # Try different parsing patterns
+    try:
+        # Pattern 1: "0-3", "1-4", etc.
+        if '-' in score_range_str:
+            parts = score_range_str.split('-')
+            if len(parts) == 2:
+                min_score = int(parts[0].strip())
+                max_score = int(parts[1].strip())
+                return min_score, max_score
+
+        # Pattern 2: "0 to 3", "1 to 4", etc.
+        if ' to ' in score_range_str.lower():
+            parts = score_range_str.lower().split(' to ')
+            if len(parts) == 2:
+                min_score = int(parts[0].strip())
+                max_score = int(parts[1].strip())
+                return min_score, max_score
+
+        # Pattern 3: Single number (assume 0 to that number)
+        if score_range_str.isdigit():
+            max_score = int(score_range_str)
+            return 0, max_score
+
+        # If no pattern matches, log warning and use default
+        logger.warning(f"Could not parse score_range: '{score_range_str}', using default 0-3")
+        return 0, 3
+
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing score_range '{score_range_str}': {str(e)}, using default 0-3")
+        return 0, 3
+
 def process_flagged_content(flagged_content_raw) -> List[str]:
     """Ensure flagged content is in list format"""
     if isinstance(flagged_content_raw, list):
@@ -537,7 +633,6 @@ def process_flagged_content(flagged_content_raw) -> List[str]:
         if not flagged_content_raw.strip():
             return []
         # If it's a string, try to split it intelligently
-        # Handle the pipe-separated format we might have stored previously
         if " | " in flagged_content_raw:
             return [sentence.strip() for sentence in flagged_content_raw.split(" | ") if sentence.strip()]
         else:
@@ -547,138 +642,62 @@ def process_flagged_content(flagged_content_raw) -> List[str]:
         return []
 
 def construct_grading_prompt(input_data: Dict[str, str], rubric_data: Dict[str, Any]) -> str:
-    """Construct the grading prompt for Bedrock with enhanced self-harm detection"""
+    """Construct the grading prompt for Bedrock with enhanced self-harm detection and proper score averaging"""
 
-    # Enhanced logging for rubric data debugging
-    logger.info("=== ENHANCED RUBRIC DATA DEBUGGING ===")
-    logger.info(f"Complete rubric data keys: {list(rubric_data.keys())}")
-    logger.info(f"Complete rubric data: {json.dumps(rubric_data, default=str, indent=2)}")
-
-    # Extract rubrics section with detailed logging
+    # Extract rubrics section
     rubrics = rubric_data.get('rubrics', {})
-    logger.info(f"=== RUBRICS SECTION ANALYSIS ===")
-    logger.info(f"Rubrics exists: {rubrics is not None}")
-    logger.info(f"Rubrics type: {type(rubrics)}")
-    logger.info(f"Rubrics keys: {list(rubrics.keys()) if isinstance(rubrics, dict) else 'NOT_A_DICT'}")
-
-    if isinstance(rubrics, dict):
-        for rubric_key, rubric_value in rubrics.items():
-            logger.info(f"Rubric '{rubric_key}': type={type(rubric_value)}")
-            if isinstance(rubric_value, dict):
-                logger.info(f"  Keys in '{rubric_key}': {list(rubric_value.keys())}")
-                # If it's DynamoDB format, log the 'M' section
-                if 'M' in rubric_value:
-                    logger.info(f"  DynamoDB 'M' keys in '{rubric_key}': {list(rubric_value['M'].keys())}")
-
     scoring_guidance = rubric_data.get('scoring_guidance', {})
-    logger.info(f"Scoring guidance type: {type(scoring_guidance)}")
-    logger.info(f"Scoring guidance: {json.dumps(scoring_guidance, default=str, indent=2)}")
 
-    # Handle essay_question and score_range with detailed logging
+    # Handle essay_question and score_range with DynamoDB format handling
     essay_question = rubric_data.get('essay_question', 'Not specified')
-    logger.info(f"Raw essay_question: {essay_question} (type: {type(essay_question)})")
-
     if isinstance(essay_question, dict) and 'S' in essay_question:
         essay_question = essay_question['S']
-        logger.info(f"Extracted essay_question from DynamoDB format: {essay_question}")
 
     score_range = rubric_data.get('score_range', '0-3')
-    logger.info(f"Raw score_range: {score_range} (type: {type(score_range)})")
-
     if isinstance(score_range, dict) and 'S' in score_range:
         score_range = score_range['S']
-        logger.info(f"Extracted score_range from DynamoDB format: {score_range}")
 
-    # Extract metrics with ENHANCED debugging
+    # Extract metrics
     metrics = []
     if rubrics:
-        logger.info("=== ENHANCED METRICS EXTRACTION ===")
-        logger.info(f"Available rubric score keys: {list(rubrics.keys())}")
-
         # Try to get a sample score to extract metrics from
-        sample_score_key = None
         sample_score = None
-
-        # Try different score keys in order of preference
         for potential_key in ['score_3', 'score_2', 'score_1', 'score_0']:
             if potential_key in rubrics:
-                sample_score_key = potential_key
                 sample_score = rubrics[potential_key]
-                logger.info(f"Using '{potential_key}' as sample for metric extraction")
                 break
 
         if sample_score is None and rubrics:
-            # If no standard score keys found, use the first available
-            sample_score_key = next(iter(rubrics.keys()))
-            sample_score = rubrics[sample_score_key]
-            logger.info(f"No standard score keys found, using first available: '{sample_score_key}'")
+            sample_score = next(iter(rubrics.values()))
 
         if sample_score is not None:
-            logger.info(f"Sample score key: {sample_score_key}")
-            logger.info(f"Sample score type: {type(sample_score)}")
-            logger.info(f"Sample score content: {json.dumps(sample_score, default=str, indent=2)}")
-
             # Handle DynamoDB format
             if isinstance(sample_score, dict) and 'M' in sample_score:
-                logger.info("Processing DynamoDB format for metrics extraction")
                 sample_data = sample_score['M']
-                logger.info(f"DynamoDB 'M' section keys: {list(sample_data.keys())}")
-
-                # Log each key and its structure
-                for key, value in sample_data.items():
-                    logger.info(f"  Key '{key}': type={type(value)}, structure={value}")
-
-                # Extract metrics (exclude metadata fields)
                 excluded_keys = ['score_label', 'avoid_confusing_with', 'look_for', 'specific_examples']
-                logger.info(f"Excluded keys: {excluded_keys}")
-
                 metrics = [key for key in sample_data.keys() if key not in excluded_keys]
-                logger.info(f"Extracted metrics (DynamoDB format): {metrics}")
-
             elif isinstance(sample_score, dict):
-                logger.info("Processing regular dict format for metrics extraction")
-                logger.info(f"Regular dict keys: {list(sample_score.keys())}")
-
-                # Log each key and its value
-                for key, value in sample_score.items():
-                    logger.info(f"  Key '{key}': type={type(value)}, value_preview={str(value)[:100]}...")
-
-                # Extract metrics (exclude metadata fields)
                 excluded_keys = ['score_label', 'avoid_confusing_with', 'look_for', 'specific_examples']
-                logger.info(f"Excluded keys: {excluded_keys}")
-
                 metrics = [key for key in sample_score.keys() if key not in excluded_keys]
-                logger.info(f"Extracted metrics (regular format): {metrics}")
 
-            else:
-                logger.error(f"Unexpected sample_score format: {type(sample_score)}")
-                logger.error(f"Sample score content: {sample_score}")
-        else:
-            logger.error("No sample score found for metrics extraction")
-    else:
-        logger.error("No rubrics section found in rubric_data")
+    # Parse score range to get min and max for metrics
+    def parse_score_range_for_prompt(score_range_str):
+        try:
+            if '-' in score_range_str:
+                parts = score_range_str.split('-')
+                if len(parts) == 2:
+                    return int(parts[0].strip()), int(parts[1].strip())
+            elif ' to ' in score_range_str.lower():
+                parts = score_range_str.lower().split(' to ')
+                if len(parts) == 2:
+                    return int(parts[0].strip()), int(parts[1].strip())
+            elif score_range_str.isdigit():
+                return 0, int(score_range_str)
+        except:
+            pass
+        return 0, 3  # Default fallback
 
-    # FINAL METRICS VALIDATION
-    logger.info("=== FINAL METRICS VALIDATION ===")
-    logger.info(f"Final extracted metrics: {metrics}")
-    logger.info(f"Total metrics count: {len(metrics)}")
-    logger.info(f"Metrics list: {json.dumps(metrics, indent=2)}")
-
-    if not metrics:
-        logger.error("ERROR: No metrics were extracted from the rubric!")
-        logger.error("This will cause issues with grading prompt construction")
-
-        # Try alternative extraction method
-        logger.info("=== ATTEMPTING ALTERNATIVE METRIC EXTRACTION ===")
-        if rubrics:
-            for score_key, score_data in rubrics.items():
-                logger.info(f"Analyzing {score_key} for alternative extraction...")
-                if isinstance(score_data, dict):
-                    if 'M' in score_data:
-                        all_keys = list(score_data['M'].keys())
-                    else:
-                        all_keys = list(score_data.keys())
-                    logger.info(f"All keys in {score_key}: {all_keys}")
+    min_metric_score, max_metric_score = parse_score_range_for_prompt(score_range)
 
     # Extract scoring guidance with DynamoDB format handling
     borderline_cases = scoring_guidance.get('borderline_cases', {})
@@ -696,76 +715,53 @@ def construct_grading_prompt(input_data: Dict[str, str], rubric_data: Dict[str, 
     if isinstance(common_pitfalls, dict) and 'S' in common_pitfalls:
         common_pitfalls = common_pitfalls['S']
 
-    # Build detailed rubric description with enhanced logging
+    # Build detailed rubric description
     rubric_details = ""
-    logger.info("=== BUILDING RUBRIC DETAILS ===")
-
     for score_key in ['score_3', 'score_2', 'score_1', 'score_0']:
         if score_key in rubrics:
-            logger.info(f"Processing {score_key} for rubric details...")
             score_num = score_key.split('_')[1]
             score_data = rubrics[score_key]
-
-            # Log the processing of each score level
-            logger.info(f"Score {score_num} data type: {type(score_data)}")
 
             # Handle DynamoDB format
             if isinstance(score_data, dict) and 'M' in score_data:
                 score_data = score_data['M']
                 score_label = score_data.get('score_label', {}).get('S', f'Score {score_num}')
-                logger.info(f"Score {score_num} label: {score_label}")
-
                 rubric_details += f"\n## SCORE {score_num} - {score_label}\n"
 
                 for metric in metrics:
                     if metric in score_data:
                         metric_value = score_data[metric].get('S', '') if isinstance(score_data[metric], dict) else score_data[metric]
-                        logger.info(f"Score {score_num}, Metric '{metric}': {len(str(metric_value))} chars")
                         rubric_details += f"{metric.replace('_', ' ').title()}: {metric_value}\n"
-                    else:
-                        logger.warning(f"Metric '{metric}' not found in {score_key}")
             else:
                 # Handle regular dict format
                 score_label = score_data.get('score_label', f'Score {score_num}')
-                logger.info(f"Score {score_num} label: {score_label}")
-
                 rubric_details += f"\n## SCORE {score_num} - {score_label}\n"
 
                 for metric in metrics:
                     if metric in score_data:
-                        logger.info(f"Score {score_num}, Metric '{metric}': {len(str(score_data[metric]))} chars")
                         rubric_details += f"{metric.replace('_', ' ').title()}: {score_data[metric]}\n"
-                    else:
-                        logger.warning(f"Metric '{metric}' not found in {score_key}")
 
             rubric_details += "\n"
-        else:
-            logger.warning(f"Score key '{score_key}' not found in rubrics")
 
-    logger.info(f"Final rubric details length: {len(rubric_details)} characters")
-    logger.info(f"First 500 chars of rubric details: {rubric_details[:500]}")
-
-    # Build metric scores JSON dynamically
+    # Build metric scores JSON dynamically using actual score range
     metric_scores_json = "{\n"
     metric_justifications_json = "{\n"
 
     for i, metric in enumerate(metrics):
         comma = "," if i < len(metrics) - 1 else ""
-        metric_scores_json += f'    "{metric}": [1-4]{comma}\n'
+        metric_scores_json += f'    "{metric}": [{min_metric_score}-{max_metric_score}]{comma}\n'
         metric_justifications_json += f'    "{metric}": "[Brief explanation for this score]"{comma}\n'
 
     metric_scores_json += "  }"
     metric_justifications_json += "  }"
 
-    logger.info(f"Generated metric_scores_json: {metric_scores_json}")
-    logger.info(f"Generated metric_justifications_json: {metric_justifications_json}")
-
-    prompt = f"""You are an expert essay grader. Grade the following student essay based on the provided rubric. You must return a JSON response with detailed scoring and justification.
+    prompt = f"""You are an expert essay grader evaluating work by students in grades 5-12. Grade the following student essay based on the provided rubric. You must return a JSON response with detailed scoring and justification.
 
 ## Essay Information
 **Essay Type:** {input_data['essay_type']}
 **Essay Question:** {essay_question}
 **Score Range:** {score_range}
+**Student Population:** Grades 5-12 (ages 10-18) - Apply age-appropriate expectations
 
 ## Student Essay to Grade:
 {input_data['essay_response']}
@@ -780,6 +776,19 @@ def construct_grading_prompt(input_data: Dict[str, str], rubric_data: Dict[str, 
 - Between 0-1: {between_0_1}
 
 **Common Pitfalls:** {common_pitfalls}
+
+## STUDENT-FRIENDLY GRADING APPROACH:
+Since you are evaluating work by young students (grades 5-12), apply these considerations:
+- **Be Encouraging and Lenient**: Recognize effort and attempt, even if execution is imperfect
+- **IGNORE SPELLING MISTAKES**: Do not penalize for spelling errors - focus on ideas and understanding
+- **Grammar Tolerance**: Don't penalize heavily for minor grammatical errors typical of young writers
+- **Age-Appropriate Expectations**: A 5th grader's analysis will be different from a 12th grader's
+- **Focus on Content Over Mechanics**: Prioritize understanding, analysis, and ideas over perfect writing
+- **Partial Credit**: Give credit for partially correct ideas and attempts
+- **Student Voice**: Value authentic student voice and perspective, even if not academically sophisticated
+- **Lenient Scoring**: When in doubt between two scores, choose the higher one to encourage learning
+- **Effort Recognition**: Acknowledge when students show effort in their analysis, even if not fully developed
+- **Writing Quality Focus**: For writing quality metrics, focus on organization and clarity of ideas, NOT spelling
 
 ## CRITICAL SAFETY INSTRUCTIONS - Self-Harm Detection:
 **MANDATORY**: Before grading, carefully examine the essay for any content indicating self-harm, suicidal ideation, or threats of violence. This includes but is not limited to:
@@ -796,28 +805,45 @@ def construct_grading_prompt(input_data: Dict[str, str], rubric_data: Dict[str, 
 3. In flagged_content, list the EXACT sentences containing concerning content (use array format)
 4. Continue with academic grading but prioritize the safety flag
 
-**Examples of content that should trigger flags:**
-- "I want to kill myself"
-- "I don't want to live anymore"
-- "Maybe I should just end it all"
-- "I've been thinking about hurting myself"
-- "Life isn't worth living"
-- "I want to hurt [person's name]"
+## SCORE CALCULATION INSTRUCTIONS:
+**CRITICAL**: Follow these steps exactly for calculating the overall essay score:
+
+1. **First**: Evaluate each rubric metric individually on a {min_metric_score}-{max_metric_score} scale based on the rubric criteria
+2. **Second**: Calculate the overall essay score using this formula:
+   - Add up all the individual metric scores that have values > {min_metric_score-1 if min_metric_score > 0 else 0}
+   - Divide by the number of metrics that have valid scores
+   - Round to the nearest whole number within the score range ({score_range})
+   
+**Example Calculation for {score_range} scale:**
+If metrics are: content_understanding={max_metric_score-1}, question_addressing={max_metric_score-1}, analysis={min_metric_score+1}, evidence={min_metric_score+1}, performance={max_metric_score-1}, writing={min_metric_score+1}
+- Sum: {(max_metric_score-1)*3 + (min_metric_score+1)*3}
+- Count of valid metrics: 6
+- Average: {((max_metric_score-1)*3 + (min_metric_score+1)*3)/6}
+- Rounded overall score: {round(((max_metric_score-1)*3 + (min_metric_score+1)*3)/6)} (within range {score_range})
+
+**Important**: Different essays should receive different overall scores based on their individual merit. Do not give all essays the same score.
 
 ## Grading Instructions:
 1. **FIRST**: Scan for self-harm content and set appropriate flags
-2. Carefully read and analyze the student essay
+2. Carefully read and analyze the student essay with age-appropriate expectations
 3. Evaluate it against each score level in the rubric
-4. Assign individual metric scores (1-4 scale for each criterion)
-5. Determine the overall essay score ({score_range})
-6. Provide detailed justification for your scoring decision
-7. Assess your confidence level (0-100%)
-8. Flag any other concerning content if present
+4. Assign individual metric scores ({min_metric_score}-{max_metric_score} scale for each criterion) - **be lenient and encouraging for young students**
+5. **IGNORE SPELLING ERRORS** - Do not let spelling mistakes affect any scores
+6. **CALCULATE overall essay score as average of metric scores (see formula above)**
+7. Provide detailed justification for your scoring decision
+8. Assess your confidence level (0-100%)
+9. Flag any other concerning content if present
+
+**SPECIAL NOTE FOR WRITING QUALITY METRIC**: When evaluating writing quality, focus ONLY on:
+- Organization and structure of ideas
+- Clarity of expression and communication
+- Flow and coherence of arguments
+**DO NOT CONSIDER**: Spelling errors, minor grammar mistakes typical of young writers
 
 ## Required JSON Response Format:
 {{
-  "overall_essay_score": [score from {score_range}],
-  "score_justification": "[Detailed explanation of why this score was assigned, referencing specific rubric criteria and essay content]",
+  "overall_essay_score": [CALCULATED AS AVERAGE - must be within {score_range}],
+  "score_justification": "[QUALITATIVE explanation of why this essay deserves this score level - focus on content quality, understanding, analysis, and writing strengths/weaknesses. DO NOT mention mathematical calculations or averaging in this field.]",
   "rubric_metric_scores": {metric_scores_json},
   "metric_justifications": {metric_justifications_json},
   "ai_confidence": [0-100],
@@ -825,19 +851,21 @@ def construct_grading_prompt(input_data: Dict[str, str], rubric_data: Dict[str, 
   "essay_flagged": "[Yes/No]",
   "flagged_content": ["array of exact sentences that triggered the flag, or empty array if not flagged"],
   "flag_reason": "[self_harm/inappropriate_content/plagiarism_suspected/off_topic/incoherent, or empty string if not flagged]",
-  "strengths": "[2-3 specific strengths of the essay]",
-  "areas_for_improvement": "[2-3 specific areas where the student could improve]"
+  "strengths": "[2-3 specific strengths, encouraging for young students]",
+  "areas_for_improvement": "[2-3 specific areas for growth, constructive for young learners]"
 }}
 
-**CRITICAL:** Return ONLY the JSON object, no additional text before or after. Ensure all text is properly escaped for JSON format. Do NOT include the essay text in your response. If self-harm content is detected, prioritize student safety over academic grading concerns."""
-
-    logger.info("=== PROMPT CONSTRUCTION COMPLETE ===")
-    logger.info(f"Final prompt length: {len(prompt)} characters")
+**CRITICAL REMINDERS:**
+- Calculate overall_essay_score as the average of all non-zero metric scores
+- Different essays should get different overall scores based on their individual quality
+- Be encouraging but honest in your assessment of young student work
+- Return ONLY the JSON object, no additional text
+- If self-harm content is detected, prioritize student safety over academic concerns"""
 
     return prompt
 
 def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, Any], grading_result: Dict[str, Any]) -> Dict[str, Any]:
-    """Prepare the final grading response with enhanced flagging support"""
+    """Prepare the final grading response with enhanced flagging support and score range information"""
 
     # Generate unique IDs
     essay_id = f"{input_data['essay_type'].replace(' ', '_')}_{input_data['student_id']}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
@@ -845,7 +873,7 @@ def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, 
     # Extract rubric metric scores
     metric_scores = grading_result.get('rubric_metric_scores', {})
 
-    # Extract metric names dynamically from the rubric (using the same logic as construct_grading_prompt)
+    # Extract metric names dynamically from the rubric
     rubrics = rubric_data.get('rubrics', {})
     metrics = []
     if rubrics:
@@ -860,14 +888,14 @@ def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, 
             metrics = [key for key in sample_score.keys()
                       if key not in ['score_label', 'avoid_confusing_with', 'look_for', 'specific_examples']]
 
-    logger.info(f"=== PREPARE GRADING RESPONSE ===")
-    logger.info(f"Extracted metrics for response: {metrics}")
-    logger.info(f"Metric scores from grading result: {metric_scores}")
-
     # Extract essay question with DynamoDB format handling
     essay_question = rubric_data.get('essay_question', '')
     if isinstance(essay_question, dict) and 'S' in essay_question:
         essay_question = essay_question['S']
+
+    # Extract and parse score range
+    score_range_raw = rubric_data.get('score_range', '0-3')
+    min_score, max_score = parse_score_range(score_range_raw)
 
     # Process flagged content (ensure it's in list format)
     flagged_content_raw = grading_result.get('flagged_content', [])
@@ -880,22 +908,27 @@ def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, 
         logger.warning(f"Number of flagged sentences: {len(flagged_content_list)}")
         for i, sentence in enumerate(flagged_content_list, 1):
             logger.warning(f"Flagged sentence {i}: {sentence}")
-        # Additional alert mechanism could be triggered here
-        # Example: send_alert_to_counselors(input_data['student_id'], flagged_content_list)
     elif flag_reason:
         logger.info(f"Essay flagged for student {input_data['student_id']}: {flag_reason}")
-        if flagged_content_list:
-            logger.info(f"Flagged content: {flagged_content_list}")
+
+    # Validate essay score is within range
+    essay_score = grading_result.get('overall_essay_score', min_score)
+    if not (min_score <= essay_score <= max_score):
+        logger.warning(f"Essay score {essay_score} is outside valid range {min_score}-{max_score} for student {input_data['student_id']}")
+        # Clamp the score to valid range
+        essay_score = max(min_score, min(max_score, essay_score))
+        logger.warning(f"Clamped essay score to {essay_score}")
 
     response = {
-        # Required output fields
+        # Required output fields - UPDATED to use content_id
         'student_id': input_data['student_id'],
         'content_id': input_data['content_id'],
         'essay_id': essay_id,
         'essay_type': input_data['essay_type'],
         'essay_question': essay_question,
-        # essay_response removed to save tokens
-        'essay_score': grading_result.get('overall_essay_score', 0),
+        'essay_score': essay_score,
+        'min_score': min_score,
+        'max_score': max_score,
         'score_description': grading_result.get('score_justification', ''),
 
         # AI assessment fields
@@ -908,7 +941,7 @@ def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, 
 
         # Enhanced flagging fields with self-harm support (LIST FORMAT)
         'essay_flagged': grading_result.get('essay_flagged', 'No'),
-        'flagged_content': flagged_content_list,  # NOW RETURNS LIST FORMAT
+        'flagged_content': flagged_content_list,
         'flag_reason': flag_reason,
 
         # Additional feedback
@@ -922,8 +955,7 @@ def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, 
     # Dynamically map individual metric scores (up to 10 metrics supported)
     for i, metric in enumerate(metrics[:10], 1):  # Limit to 10 metrics
         response[f'rubric_metric{i}_score'] = metric_scores.get(metric, 0)
-        response[f'rubric_metric{i}_name'] = metric  # Include metric name for reference
-        logger.info(f"Mapped metric {i}: {metric} = {metric_scores.get(metric, 0)}")
+        response[f'rubric_metric{i}_name'] = metric
 
     # Fill remaining metric slots with 0 if fewer than 10 metrics
     for i in range(len(metrics) + 1, 11):
@@ -947,24 +979,26 @@ def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, 
         'grader_model': 'amazon.nova-pro-v1:0'
     })
 
-    # Special handling for self-harm cases - could trigger additional workflows
+    # Special handling for self-harm cases
     if flag_reason == 'self_harm':
         response['requires_immediate_attention'] = True
         response['escalation_needed'] = True
         response['flagged_sentences_count'] = len(flagged_content_list)
-        # You could add additional fields for tracking/workflow purposes:
-        # response['alert_sent_timestamp'] = datetime.utcnow().isoformat() + 'Z'
-        # response['counselor_notification_status'] = 'pending'
     else:
         response['requires_immediate_attention'] = False
         response['escalation_needed'] = False
         response['flagged_sentences_count'] = 0
 
-    logger.info(f"Prepared grading response for student {input_data['student_id']} with score {response['essay_score']}")
-    logger.info(f"Rubric metrics used: {metrics}")
+    # Add score validation information
+    response['score_validation'] = {
+        'is_within_range': min_score <= grading_result.get('overall_essay_score', min_score) <= max_score,
+        'original_score': grading_result.get('overall_essay_score', min_score),
+        'score_range_string': score_range_raw
+    }
+
+    logger.info(f"Prepared grading response for student {input_data['student_id']} with score {response['essay_score']} (range: {min_score}-{max_score})")
 
     if flag_reason == 'self_harm':
         logger.warning(f"CRITICAL: Self-harm content detected and flagged for student {input_data['student_id']}")
-        logger.warning(f"Total flagged sentences: {len(flagged_content_list)}")
 
     return response
