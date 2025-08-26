@@ -153,7 +153,7 @@ phases:
       - cd cdk
       - echo "Installing Python dependencies..."
       - python -m pip install --upgrade pip
-      - pip install -r requirements.txt
+      - pip install -r ../requirements.txt
       - echo "CDK Bootstrap check..."
       - cdk bootstrap --context account=$AWS_ACCOUNT --context region=$AWS_REGION
 
@@ -182,10 +182,11 @@ fi
 # Check if CodeBuild project exists
 echo "Checking for existing CodeBuild project..."
 if run_aws codebuild describe-project --name "$PROJECT_NAME" --profile "$AWS_PROFILE" >/dev/null 2>&1; then
-    echo "CodeBuild project exists, updating configuration..."
+    echo "CodeBuild project exists, updating configuration to use cdk_stack branch..."
     run_aws codebuild update-project \
         --name "$PROJECT_NAME" \
         --source "{\"type\": \"GITHUB\", \"location\": \"$GITHUB_URL\"}" \
+        --source-version "cdk_stack" \
         --artifacts '{"type": "NO_ARTIFACTS"}' \
         --environment "{
             \"type\": \"LINUX_CONTAINER\",
@@ -201,15 +202,16 @@ if run_aws codebuild describe-project --name "$PROJECT_NAME" --profile "$AWS_PRO
         --profile "$AWS_PROFILE" >/dev/null
 
     if [ $? -eq 0 ]; then
-        echo "CodeBuild project updated successfully"
+        echo "CodeBuild project updated successfully to use cdk_stack branch"
     else
         echo "Failed to update CodeBuild project, but continuing with existing project..."
     fi
 else
-    echo "Creating new CodeBuild project..."
+    echo "Creating new CodeBuild project with cdk_stack branch..."
     CREATE_RESULT=$(run_aws codebuild create-project \
         --name "$PROJECT_NAME" \
         --source "{\"type\": \"GITHUB\", \"location\": \"$GITHUB_URL\"}" \
+        --source-version "cdk_stack" \
         --artifacts '{"type": "NO_ARTIFACTS"}' \
         --environment "{
             \"type\": \"LINUX_CONTAINER\",
@@ -225,7 +227,7 @@ else
         --profile "$AWS_PROFILE" 2>&1)
 
     if [ $? -eq 0 ]; then
-        echo "CodeBuild project created successfully"
+        echo "CodeBuild project created successfully with cdk_stack branch"
     else
         echo "CodeBuild project creation failed with error:"
         echo "$CREATE_RESULT"
