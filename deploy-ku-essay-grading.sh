@@ -52,7 +52,7 @@ fi
 echo "Using AWS profile: $AWS_PROFILE"
 AWS_ACCOUNT=$(run_aws sts get-caller-identity --profile "$AWS_PROFILE" --query Account --output text 2>/dev/null)
 AWS_REGION=$(run_aws configure get region --profile "$AWS_PROFILE" 2>/dev/null || echo "us-east-1")
-ENVIRONMENT="dev"
+ENVIRONMENT="test"
 
 if [ -z "$AWS_ACCOUNT" ] || [ "$AWS_ACCOUNT" = "None" ]; then
     echo "Failed to get account ID from profile: $AWS_PROFILE"
