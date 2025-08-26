@@ -52,9 +52,6 @@ class KUEssayGradingStack(Stack):
             ),
             billing_mode=self.config["table_settings"]["billing_mode"],
             removal_policy=self.config["table_settings"]["removal_policy"],
-            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
-                point_in_time_recovery_enabled=self.env_name == "prod"
-            ),
             deletion_protection=self.env_name == "prod"
         )
 
