@@ -38,16 +38,16 @@ class KUEssayGradingStack(Stack):
 
     def create_dynamodb_tables(self):
         """Create DynamoDB tables"""
-        # ku_rubrics table with composite key structure
+        # ku_grading_rubrics table with composite key structure
         self.rubrics_table = dynamodb.Table(
             self, "KURubricsTable",
-            table_name="ku_rubrics",
+            table_name="ku_grading_rubrics",
             partition_key=dynamodb.Attribute(
                 name="essay_type",
                 type=dynamodb.AttributeType.STRING
             ),
             sort_key=dynamodb.Attribute(
-                name="essay_id",
+                name="content_id",
                 type=dynamodb.AttributeType.STRING
             ),
             billing_mode=self.config["table_settings"]["billing_mode"],
@@ -106,7 +106,7 @@ class KUEssayGradingStack(Stack):
                     "dynamodb:UpdateItem",
                     "dynamodb:DeleteItem"
                 ],
-                resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/ku_rubrics"]
+                resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/ku_grading_rubrics"]
             )
         )
 
@@ -173,7 +173,7 @@ class KUEssayGradingStack(Stack):
                     "dynamodb:Query",
                     "dynamodb:Scan"
                 ],
-                resources=["arn:aws:dynamodb:*:*:table/ku_rubrics"]
+                resources=["arn:aws:dynamodb:*:*:table/ku_grading_rubrics"]
             )
         )
 
@@ -194,6 +194,32 @@ class KUEssayGradingStack(Stack):
                 effect=iam.Effect.ALLOW,
                 actions=["s3:ListBucket"],
                 resources=["arn:aws:s3:::ku-output-grading-bucket"]
+            )
+        )
+
+        self.rubric_lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "s3:GetObject",
+                    "s3:ListBucket"
+                ],
+                resources=["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+            )
+        )
+
+        # Add specific permissions for kansas-uni-documents bucket
+        self.rubric_lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "s3:GetObject",
+                    "s3:ListBucket"
+                ],
+                resources=[
+                    "arn:aws:s3:::ku-documents",
+                    "arn:aws:s3:::ku-documents/*"
+                ]
             )
         )
 
@@ -299,6 +325,47 @@ class KUEssayGradingStack(Stack):
             source_arn=f"arn:aws:execute-api:{self.region}:{self.account}:{self.api.rest_api_id}/*/POST/grade-essay"
         )
 
+        # NEW: Create API Gateway integration for rubric generation
+        rubric_generation_integration = apigateway.LambdaIntegration(
+            self.rubric_generation_lambda,
+            proxy=True,  # Use AWS_PROXY integration
+            integration_responses=[
+                apigateway.IntegrationResponse(
+                    status_code="200",
+                    response_parameters={
+                        "method.response.header.Access-Control-Allow-Origin": "'*'"
+                    }
+                )
+            ]
+        )
+
+        # NEW: Create /generate-rubric resource and POST method
+        generate_rubric_resource = self.api.root.add_resource("generate-rubric")
+        generate_rubric_method = generate_rubric_resource.add_method(
+            "POST",
+            rubric_generation_integration,
+            authorization_type=apigateway.AuthorizationType.NONE,
+            method_responses=[
+                apigateway.MethodResponse(
+                    status_code="200",
+                    response_parameters={
+                        "method.response.header.Access-Control-Allow-Origin": False
+                    },
+                    response_models={
+                        "application/json": apigateway.Model.EMPTY_MODEL
+                    }
+                )
+            ]
+        )
+
+        # NEW: Grant API Gateway permission to invoke rubric generation lambda
+        self.rubric_generation_lambda.add_permission(
+            "AllowAPIGatewayInvokeRubricGeneration",
+            principal=iam.ServicePrincipal("apigateway.amazonaws.com"),
+            action="lambda:InvokeFunction",
+            source_arn=f"arn:aws:execute-api:{self.region}:{self.account}:{self.api.rest_api_id}/*/POST/generate-rubric"
+        )
+
     def create_outputs(self):
         """Create CloudFormation outputs"""
 
@@ -336,4 +403,10 @@ class KUEssayGradingStack(Stack):
             self, "GradeEssayEndpoint",
             value=f"{self.api.url}grade-essay",
             description="Endpoint for grading essays"
+        )
+
+        CfnOutput(
+            self, "GenerateRubricEndpoint",
+            value=f"{self.api.url}generate-rubric",
+            description="Endpoint for generating rubrics"
         )

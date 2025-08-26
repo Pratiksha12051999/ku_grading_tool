@@ -18,7 +18,7 @@ dynamodb = boto3.resource('dynamodb')
 s3_client = boto3.client('s3')
 
 # DynamoDB table
-TABLE_NAME = 'ku_rubrics'
+TABLE_NAME = 'ku_grading_rubrics'
 table = dynamodb.Table(TABLE_NAME)
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
@@ -51,21 +51,17 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         # Process S3 files to get content
         processed_data = process_s3_files(input_data)
 
-        # Generate essay_id
-        essay_id = generate_essay_id(processed_data)
-
         # Generate rubric using Bedrock
         rubric_json = generate_rubric_with_bedrock(processed_data)
 
         # Store rubric in DynamoDB
-        result = store_rubric_in_dynamodb(processed_data, essay_id, rubric_json)
+        result = store_rubric_in_dynamodb(processed_data, rubric_json)
 
         return {
             'statusCode': 200,
             'body': json.dumps({
                 'message': 'Rubric generated and stored successfully',
                 'essay_type': processed_data['essay_type'],
-                'essay_id': essay_id,
                 'dynamodb_response': result
             }, default=str)
         }
@@ -262,19 +258,6 @@ def parse_s3_url(s3_url: str) -> tuple:
     except Exception as e:
         raise ValueError(f"Failed to parse S3 URL {s3_url}: {str(e)}")
 
-def generate_essay_id(input_data: Dict[str, str]) -> str:
-    """Generate unique essay_id from input parameters"""
-
-    # Create essay_id from title and grade level
-    title = input_data['source_text_title'].replace(' ', '_').replace('.', '')
-    grade = input_data['grade_level']
-    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-
-    essay_id = f"{title}_Grade{grade}_{timestamp}"
-
-    logger.info(f"Generated essay_id: {essay_id}")
-    return essay_id
-
 def generate_rubric_with_bedrock(input_data: Dict[str, str]) -> Dict[str, Any]:
     """Call Bedrock to generate rubric using the prompt"""
 
@@ -429,15 +412,13 @@ Structure your response as a JSON object with this exact format:
 
     return prompt
 
-def store_rubric_in_dynamodb(input_data: Dict[str, str], essay_id: str, rubric_json: Dict[str, Any]) -> Dict[str, Any]:
+def store_rubric_in_dynamodb(input_data: Dict[str, str], rubric_json: Dict[str, Any]) -> Dict[str, Any]:
     """Store the generated rubric in DynamoDB"""
-
-    logger.info(f"Storing rubric in DynamoDB with essay_id: {essay_id}")
 
     # Prepare DynamoDB item
     item = {
         'essay_type': input_data['essay_type'],
-        'essay_id': essay_id,
+        'content_id': input_data['content_id'],
         'essay_title': rubric_json.get('essay_title', input_data['source_text_title']),
         'author': rubric_json.get('author', input_data['author']),
         'grade_level': int(rubric_json.get('grade_level', input_data['grade_level'])),
@@ -463,14 +444,14 @@ def store_rubric_in_dynamodb(input_data: Dict[str, str], essay_id: str, rubric_j
         logger.error(f"Error storing rubric in DynamoDB: {str(e)}")
         raise
 
-def get_rubric_from_dynamodb(essay_type: str, essay_id: str) -> Optional[Dict[str, Any]]:
+def get_rubric_from_dynamodb(essay_type: str, content_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve a rubric from DynamoDB (utility function)"""
 
     try:
         response = table.get_item(
             Key={
                 'essay_type': essay_type,
-                'essay_id': essay_id
+                'content_id': content_id
             }
         )
 

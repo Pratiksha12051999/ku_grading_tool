@@ -19,7 +19,7 @@ dynamodb = boto3.resource('dynamodb')
 s3_client = boto3.client('s3')
 
 # Configuration
-RUBRICS_TABLE = 'ku_rubrics'
+RUBRICS_TABLE = 'ku_grading_rubrics'
 S3_BUCKET = 'ku-grading-output-bucket'
 rubrics_table = dynamodb.Table(RUBRICS_TABLE)
 
@@ -128,7 +128,7 @@ def process_single_essay(request_data: Dict[str, Any]) -> Dict[str, Any]:
         # Extract and validate input parameters
         input_data = extract_and_validate_input(request_data)
 
-        # Retrieve rubric from DynamoDB using essay_type and content_id as essay_id
+        # Retrieve rubric from DynamoDB using essay_type and content_id as content_id
         rubric_data = get_cached_rubric(input_data['essay_type'], input_data.get('content_id'))
 
         # Grade the essay using Bedrock
@@ -474,13 +474,9 @@ def get_rubric_for_essay_type(essay_type: str, content_id: Optional[str] = None)
         if content_id:
             logger.info(f"Querying rubrics for essay type: {essay_type} and content_id: {content_id}")
 
-            # filter_expr = Attr('essay_id').eq(content_id)
-
-            # Query DynamoDB for specific essay_type and essay_id (using content_id value)
+            # Query DynamoDB for specific essay_type and content_id
             response = rubrics_table.query(
-                KeyConditionExpression=Key('essay_type').eq(essay_type) & Key('essay_id').eq(content_id),
-                # FilterExpression=filter_expr,
-                # FilterExpression=Attr('essay_id.S').eq(content_id),
+                KeyConditionExpression=Key('essay_type').eq(essay_type) & Key('content_id').eq(content_id),
                 Limit=1
             )
 
@@ -490,17 +486,17 @@ def get_rubric_for_essay_type(essay_type: str, content_id: Optional[str] = None)
 
             if not response['Items']:
                 logger.warning(f"No rubric found for essay type: {essay_type} and content_id: {content_id}")
-                logger.info(f"Falling back to most recent rubric for essay type: {essay_type}")
-
-                # Fallback to most recent rubric for this essay_type
-                response = rubrics_table.query(
-                    KeyConditionExpression=Key('essay_type').eq(essay_type),
-                    ScanIndexForward=False,  # Get newest first
-                    Limit=1
-                )
-
-                if not response['Items']:
-                    raise ValueError(f"No rubric found for essay type: {essay_type} (even with fallback)")
+                # logger.info(f"Falling back to most recent rubric for essay type: {essay_type}")
+                #
+                # # Fallback to most recent rubric for this essay_type
+                # response = rubrics_table.query(
+                #     KeyConditionExpression=Key('essay_type').eq(essay_type),
+                #     ScanIndexForward=False,  # Get newest first
+                #     Limit=1
+                # )
+                #
+                # if not response['Items']:
+                raise ValueError(f"No rubric found for essay type: {essay_type} (even with fallback)")
 
         else:
             logger.info(f"Querying rubrics for essay type: {essay_type} (most recent)")
@@ -518,7 +514,7 @@ def get_rubric_for_essay_type(essay_type: str, content_id: Optional[str] = None)
         rubric = response['Items'][0]
 
         # Validate that this is the correct rubric
-        rubric_essay_id = rubric.get('essay_id', '')
+        rubric_essay_id = rubric.get('content_id', '')
         if isinstance(rubric_essay_id, dict) and 'S' in rubric_essay_id:
             rubric_essay_id = rubric_essay_id['S']
 
@@ -867,9 +863,6 @@ If metrics are: content_understanding={max_metric_score-1}, question_addressing=
 def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, Any], grading_result: Dict[str, Any]) -> Dict[str, Any]:
     """Prepare the final grading response with enhanced flagging support and score range information"""
 
-    # Generate unique IDs
-    essay_id = f"{input_data['essay_type'].replace(' ', '_')}_{input_data['student_id']}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-
     # Extract rubric metric scores
     metric_scores = grading_result.get('rubric_metric_scores', {})
 
@@ -923,7 +916,6 @@ def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, 
         # Required output fields - UPDATED to use content_id
         'student_id': input_data['student_id'],
         'content_id': input_data['content_id'],
-        'essay_id': essay_id,
         'essay_type': input_data['essay_type'],
         'essay_question': essay_question,
         'essay_score': essay_score,
@@ -963,7 +955,7 @@ def prepare_grading_response(input_data: Dict[str, str], rubric_data: Dict[str, 
         response[f'rubric_metric{i}_name'] = ''
 
     # Extract metadata with DynamoDB format handling
-    rubric_used = rubric_data.get('essay_id', '')
+    rubric_used = rubric_data.get('content_id', '')
     if isinstance(rubric_used, dict) and 'S' in rubric_used:
         rubric_used = rubric_used['S']
 
