@@ -155,7 +155,7 @@ phases:
       - python -m pip install --upgrade pip
       - pip install -r ../requirements.txt
       - echo "CDK Bootstrap check..."
-      - cdk bootstrap --context account=$AWS_ACCOUNT --context region=$AWS_REGION --context profile=$AWS_PROFILE--verbose
+      - cdk bootstrap --context account=$AWS_ACCOUNT --context region=$AWS_REGION --context profile=KUDeveloper --verbose
 
   build:
     commands:
