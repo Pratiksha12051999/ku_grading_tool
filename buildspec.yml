@@ -15,12 +15,18 @@ phases:
       - echo "Pre-build phase started on $(date)"
       - echo "Current directory:" $(pwd)
       - echo "Listing files:" && ls -la
-      - cd cdk
+      - echo "Environment variables:"
+      - echo "AWS_ACCOUNT=$AWS_ACCOUNT"
+      - echo "AWS_REGION=$AWS_REGION"
+      - echo "ENVIRONMENT=$ENVIRONMENT"
       - echo "Installing Python dependencies..."
       - python -m pip install --upgrade pip
-      - pip install -r ../requirements.txt
+      - pip install -r cdk/requirements.txt
+      - cd cdk
       - echo "CDK Bootstrap check..."
-      - cdk bootstrap --context account=$AWS_ACCOUNT --context region=$AWS_REGION
+      - echo "Checking if bootstrap already exists..."
+      - aws s3 ls s3://cdk-hnb659fds-assets-$AWS_ACCOUNT-$AWS_REGION/ || echo "Bootstrap bucket not found"
+      - cdk bootstrap --context account=$AWS_ACCOUNT --context region=$AWS_REGION --verbose
 
   build:
     commands:
