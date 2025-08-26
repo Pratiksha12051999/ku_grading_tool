@@ -26,7 +26,7 @@ phases:
       - echo "CDK Bootstrap check..."
       - echo "Checking if bootstrap already exists..."
       - aws s3 ls s3://cdk-hnb659fds-assets-$AWS_ACCOUNT-$AWS_REGION/ || echo "Bootstrap bucket not found"
-      - cdk bootstrap --context account=$AWS_ACCOUNT --context region=$AWS_REGION --verbose
+      - cdk bootstrap --context account=$AWS_ACCOUNT --context region=$AWS_REGION --context profile=$AWS_PROFILE--verbose
 
   build:
     commands:
