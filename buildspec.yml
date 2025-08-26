@@ -21,7 +21,7 @@ phases:
       - echo "ENVIRONMENT=$ENVIRONMENT"
       - echo "Installing Python dependencies..."
       - python -m pip install --upgrade pip
-      - pip install -r ../requirements.txt
+      - pip install -r requirements.txt
       - cd cdk
       - echo "CDK Bootstrap check..."
       - echo "Checking if bootstrap already exists..."
