@@ -60,7 +60,7 @@ class KUEssayGradingStack(Stack):
         # Output grading bucket (matching existing bucket name)
         self.output_grading_bucket = s3.Bucket(
             self, "KUOutputGradingBucket",
-            bucket_name="ku-grading-output-bucket",
+            # bucket_name="ku-grading-output-bucket",
             removal_policy=self.config["table_settings"]["removal_policy"],
             auto_delete_objects=self.env_name != "prod",
             versioned=self.env_name == "prod",
@@ -252,6 +252,7 @@ class KUEssayGradingStack(Stack):
             role=self.essay_grading_lambda_role,
             environment={
                 "RUBRICS_TABLE": self.rubrics_table.table_name,
+                "OUTPUT_BUCKET_NAME": self.output_grading_bucket.bucket_name,
                 "LOG_LEVEL": "INFO"
             },
             description="Lambda function for grading essays"

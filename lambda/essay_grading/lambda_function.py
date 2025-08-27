@@ -8,6 +8,7 @@ from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.conditions import Attr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import os
 
 # Configure logging
 logger = logging.getLogger()
@@ -20,7 +21,7 @@ s3_client = boto3.client('s3')
 
 # Configuration
 RUBRICS_TABLE = 'ku_grading_rubrics'
-S3_BUCKET = 'ku-grading-output-bucket'
+S3_BUCKET = os.environ.get('OUTPUT_BUCKET_NAME')
 rubrics_table = dynamodb.Table(RUBRICS_TABLE)
 
 # Cache for rubrics to avoid repeated DynamoDB calls
