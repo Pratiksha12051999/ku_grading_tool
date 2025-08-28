@@ -99,8 +99,16 @@ def extract_input_parameters(event: Dict[str, Any]) -> Dict[str, str]:
             raise ValueError(f"Failed to read from S3: {str(e)}")
 
     else:
-        # Use direct input from event
-        input_data = event.copy()
+        # Use direct input from event body (API Gateway)
+        if not event.get('body'):
+            raise ValueError("Request body is missing")
+
+        try:
+            # Parse the JSON body string
+            input_data = json.loads(event['body'])
+            logger.info(f"Parsed request body: {list(input_data.keys())}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in request body: {str(e)}")
 
     # Validate required parameters
     required_params = [
@@ -109,6 +117,7 @@ def extract_input_parameters(event: Dict[str, Any]) -> Dict[str, str]:
         'original_rubric_guidelines_s3_url', 'sample_essays_csv_s3_url'
     ]
 
+    # Check for missing parameters (None values, not empty strings)
     missing_params = [param for param in required_params if param not in input_data]
     if missing_params:
         raise ValueError(f"Missing required parameters: {', '.join(missing_params)}")
