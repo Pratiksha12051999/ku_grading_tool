@@ -68,8 +68,17 @@ class KUEssayGradingStack(Stack):
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL
         )
 
+        self.ku_documents_bucket = s3.Bucket(
+            self, "KUDocumentsBucket",
+            removal_policy=self.config["table_settings"]["removal_policy"],
+            auto_delete_objects=self.env_name != "prod",
+            versioned=self.env_name == "prod",
+            public_read_access=False,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL
+        )
+
     def create_iam_roles(self):
-        """Create IAM roles for Lambda functions matching existing configuration"""
+        """Create IAM roles for Lambda functions with complete permissions"""
 
         # Rubric Generation Lambda Role (matches ku_rubric_lambda_execution_role)
         self.rubric_lambda_role = iam.Role(
@@ -82,18 +91,50 @@ class KUEssayGradingStack(Stack):
             ]
         )
 
-        # Add Bedrock permissions (exact match)
+        # Grant S3 permissions using the existing ku_documents_bucket
+        # This is the correct way to reference your existing bucket
+        self.ku_documents_bucket.grant_read(self.rubric_lambda_role)
+
+        # Add additional S3 permissions that grant_read might not cover
         self.rubric_lambda_role.add_to_policy(
             iam.PolicyStatement(
+                sid="AdditionalS3Permissions",
                 effect=iam.Effect.ALLOW,
-                actions=["bedrock:InvokeModel"],
-                resources=["arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0"]
+                actions=[
+                    "s3:GetObjectVersion",
+                    "s3:ListBucketVersions",
+                    "s3:GetBucketLocation",
+                    "s3:GetBucketVersioning"
+                ],
+                resources=[
+                    self.ku_documents_bucket.bucket_arn,
+                    f"{self.ku_documents_bucket.bucket_arn}/*"
+                ]
             )
         )
 
-        # Add DynamoDB permissions (full CRUD - exact match)
+        # Enhanced Bedrock permissions
         self.rubric_lambda_role.add_to_policy(
             iam.PolicyStatement(
+                sid="BedrockPermissions",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:ListFoundationModels"
+                ],
+                resources=[
+                    "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0",
+                    "arn:aws:bedrock:*::foundation-model/amazon.nova-lite-v1:0",
+                    "arn:aws:bedrock:*::foundation-model/anthropic.*"
+                ]
+            )
+        )
+
+        # DynamoDB permissions
+        self.rubric_lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="DynamoDBPermissions",
                 effect=iam.Effect.ALLOW,
                 actions=[
                     "dynamodb:PutItem",
@@ -101,25 +142,17 @@ class KUEssayGradingStack(Stack):
                     "dynamodb:Query",
                     "dynamodb:Scan",
                     "dynamodb:UpdateItem",
-                    "dynamodb:DeleteItem"
+                    "dynamodb:DeleteItem",
+                    "dynamodb:DescribeTable"
                 ],
-                resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/ku_grading_rubrics"]
+                resources=[
+                    f"arn:aws:dynamodb:{self.region}:{self.account}:table/ku_grading_rubrics",
+                    f"arn:aws:dynamodb:{self.region}:{self.account}:table/ku_grading_rubrics/*"
+                ]
             )
         )
 
-        # Add S3 read permissions (any S3 bucket - exact match)
-        self.rubric_lambda_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "s3:GetObject",
-                    "s3:ListBucket"
-                ],
-                resources=["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
-            )
-        )
-
-        # Essay Grading Lambda Role (matches ku_essay_grading_lambda-role-x51llveh)
+        # Essay Grading Lambda Role
         self.essay_grading_lambda_role = iam.Role(
             self, "KUEssayGradingLambdaRole",
             role_name=f"ku_essay_grading_lambda_role_{self.env_name}",
@@ -128,97 +161,120 @@ class KUEssayGradingStack(Stack):
             path="/service-role/"
         )
 
-        # Custom managed policy for CloudWatch Logs (matching existing structure)
+        # Custom managed policy for CloudWatch Logs
         log_policy = iam.ManagedPolicy(
             self, "EssayGradingLambdaLogPolicy",
             managed_policy_name=f"AWSLambdaBasicExecutionRole-{self.env_name}",
             description="CloudWatch Logs policy for essay grading lambda",
             statements=[
                 iam.PolicyStatement(
+                    sid="CreateLogGroup",
                     effect=iam.Effect.ALLOW,
                     actions=["logs:CreateLogGroup"],
                     resources=[f"arn:aws:logs:{self.region}:{self.account}:*"]
                 ),
                 iam.PolicyStatement(
+                    sid="LogStreamOperations",
                     effect=iam.Effect.ALLOW,
                     actions=[
                         "logs:CreateLogStream",
                         "logs:PutLogEvents"
                     ],
-                    resources=[f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/lambda/ku_essay_grading_lambda:*"]
+                    resources=[
+                        f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/lambda/ku_essay_grading_lambda:*"
+                    ]
                 )
             ]
         )
 
         self.essay_grading_lambda_role.add_managed_policy(log_policy)
 
-        # Add Bedrock permissions (exact match)
+        # Grant the essay grading lambda read access to ku_documents_bucket too (if needed)
+        self.ku_documents_bucket.grant_read(self.essay_grading_lambda_role)
+
+        # Bedrock permissions for essay grading lambda
         self.essay_grading_lambda_role.add_to_policy(
             iam.PolicyStatement(
+                sid="EssayGradingBedrockPermissions",
                 effect=iam.Effect.ALLOW,
-                actions=["bedrock:InvokeModel"],
-                resources=["arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0"]
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream"
+                ],
+                resources=[
+                    "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0",
+                    "arn:aws:bedrock:*::foundation-model/amazon.nova-lite-v1:0"
+                ]
             )
         )
 
-        # Add DynamoDB read permissions (exact match)
+        # DynamoDB read permissions for essay grading lambda
         self.essay_grading_lambda_role.add_to_policy(
             iam.PolicyStatement(
+                sid="EssayGradingDynamoDBRead",
                 effect=iam.Effect.ALLOW,
                 actions=[
                     "dynamodb:GetItem",
                     "dynamodb:Query",
-                    "dynamodb:Scan"
-                ],
-                resources=["arn:aws:dynamodb:*:*:table/ku_grading_rubrics"]
-            )
-        )
-
-        # Add S3 permissions for output bucket (exact match)
-        self.essay_grading_lambda_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "s3:PutObject",
-                    "s3:PutObjectAcl"
-                ],
-                resources=["arn:aws:s3:::ku-grading-output-bucket/*"]
-            )
-        )
-
-        self.essay_grading_lambda_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=["s3:ListBucket"],
-                resources=["arn:aws:s3:::ku-output-grading-bucket"]
-            )
-        )
-
-        self.rubric_lambda_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "s3:GetObject",
-                    "s3:ListBucket"
-                ],
-                resources=["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
-            )
-        )
-
-        # Add specific permissions for kansas-uni-documents bucket
-        self.rubric_lambda_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "s3:GetObject",
-                    "s3:ListBucket"
+                    "dynamodb:Scan",
+                    "dynamodb:DescribeTable"
                 ],
                 resources=[
-                    "arn:aws:s3:::ku-documents",
-                    "arn:aws:s3:::ku-documents/*"
+                    f"arn:aws:dynamodb:{self.region}:{self.account}:table/ku_grading_rubrics",
+                    f"arn:aws:dynamodb:{self.region}:{self.account}:table/ku_grading_rubrics/*"
                 ]
             )
         )
+
+        # S3 permissions for essay grading output
+        self.essay_grading_lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="EssayGradingS3WritePermissions",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "s3:PutObject",
+                    "s3:PutObjectAcl",
+                    "s3:GetObject",  # In case it needs to read back
+                    "s3:ListBucket",
+                    "s3:GetBucketLocation"
+                ],
+                resources=[
+                    # Reference your output bucket created in CDK
+                    self.output_grading_bucket.bucket_arn,  # Adjust to your bucket variable name
+                    f"{self.output_grading_bucket.bucket_arn}/*"
+                ]
+            )
+        )
+
+        # Also grant using CDK's high-level method (if you have the bucket reference)
+        # This is the preferred approach as it's cleaner
+        if hasattr(self, 'output_grading_bucket'):
+            self.output_grading_bucket.grant_write(self.essay_grading_lambda_role)
+            self.output_grading_bucket.grant_read(self.essay_grading_lambda_role)  # In case it needs read access
+
+        # Alternative: If you don't have direct bucket reference, use ARN pattern matching
+        else:
+            self.essay_grading_lambda_role.add_to_policy(
+                iam.PolicyStatement(
+                    sid="EssayGradingOutputBucketAccess",
+                    effect=iam.Effect.ALLOW,
+                    actions=[
+                        "s3:PutObject",
+                        "s3:PutObjectAcl",
+                        "s3:GetObject",
+                        "s3:ListBucket",
+                        "s3:GetBucketLocation"
+                    ],
+                    resources=[
+                        # Pattern match for any output bucket in your stack
+                        f"arn:aws:s3:::kuessaygradingstack-{self.env_name}-*",
+                        f"arn:aws:s3:::kuessaygradingstack-{self.env_name}-*/*",
+                        # Specific pattern for output bucket
+                        f"arn:aws:s3:::*output*bucket*",
+                        f"arn:aws:s3:::*output*bucket*/*"
+                    ]
+                )
+            )
 
     def create_lambda_functions(self):
         """Create Lambda functions"""
@@ -234,6 +290,7 @@ class KUEssayGradingStack(Stack):
             memory_size=self.config["memory_size"]["ku_rubric_generation_lambda"],
             role=self.rubric_lambda_role,
             environment={
+                "KU_DOCUMENTS_BUCKET": self.ku_documents_bucket.bucket_name,
                 "TABLE_NAME": self.rubrics_table.table_name,
                 "LOG_LEVEL": "INFO"
             },
@@ -377,6 +434,12 @@ class KUEssayGradingStack(Stack):
             self, "OutputGradingBucketName",
             value=self.output_grading_bucket.bucket_name,
             description="Name of the output grading S3 bucket"
+        )
+
+        CfnOutput(
+            self, "KUDocumentsBucketName",
+            value=self.ku_documents_bucket.bucket_name,
+            description="Name of the KU Document storage S3 bucket"
         )
 
         CfnOutput(

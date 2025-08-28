@@ -4,6 +4,7 @@ import logging
 import uuid
 import csv
 import io
+import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from urllib.parse import urlparse
@@ -17,9 +18,18 @@ bedrock_client = boto3.client('bedrock-runtime')
 dynamodb = boto3.resource('dynamodb')
 s3_client = boto3.client('s3')
 
+# Get configuration from environment variables
+TABLE_NAME = os.environ.get('TABLE_NAME', 'ku_grading_rubrics')
+KU_DOCUMENTS_BUCKET = os.environ.get('KU_DOCUMENTS_BUCKET', 'ku-documents')
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
+
+# Set log level from environment
+logger.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
+
 # DynamoDB table
-TABLE_NAME = 'ku_grading_rubrics'
 table = dynamodb.Table(TABLE_NAME)
+
+logger.info(f"Lambda initialized with KU_DOCUMENTS_BUCKET: {KU_DOCUMENTS_BUCKET}, TABLE_NAME: {TABLE_NAME}")
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
@@ -145,8 +155,9 @@ def download_and_extract_pdf_text(s3_url: str) -> str:
     """Download PDF from S3 and extract text content"""
 
     try:
-        # Parse S3 URL
+        # Parse S3 URL and validate bucket
         bucket, key = parse_s3_url(s3_url)
+        validate_s3_bucket(bucket, s3_url)
 
         logger.info(f"Downloading PDF from s3://{bucket}/{key}")
 
@@ -183,8 +194,9 @@ def download_and_format_csv_essays(s3_url: str) -> str:
     """Download CSV from S3 and format essay data"""
 
     try:
-        # Parse S3 URL
+        # Parse S3 URL and validate bucket
         bucket, key = parse_s3_url(s3_url)
+        validate_s3_bucket(bucket, s3_url)
 
         logger.info(f"Downloading CSV from s3://{bucket}/{key}")
 
@@ -206,6 +218,23 @@ def download_and_format_csv_essays(s3_url: str) -> str:
     except Exception as e:
         logger.error(f"Error processing CSV: {str(e)}")
         raise ValueError(f"Failed to process CSV from {s3_url}: {str(e)}")
+
+def validate_s3_bucket(bucket: str, s3_url: str) -> None:
+    """Validate that the S3 URL is pointing to the expected KU documents bucket"""
+
+    if bucket != KU_DOCUMENTS_BUCKET:
+        logger.warning(f"S3 URL bucket '{bucket}' does not match expected KU_DOCUMENTS_BUCKET '{KU_DOCUMENTS_BUCKET}'")
+
+        # Check if we should allow other buckets (flexible approach)
+        # Comment out these lines if you want strict bucket validation
+        allowed_bucket_patterns = [
+            'ku-documents',
+            'kansas-uni-documents',
+            KU_DOCUMENTS_BUCKET
+        ]
+
+        if bucket not in allowed_bucket_patterns:
+            raise ValueError(f"Invalid bucket '{bucket}' in S3 URL {s3_url}. Expected bucket: {KU_DOCUMENTS_BUCKET}")
 
 def format_essays_for_prompt(essays_data: List[Dict[str, str]]) -> str:
     """Format CSV essay data for inclusion in the Bedrock prompt"""
@@ -266,6 +295,10 @@ def parse_s3_url(s3_url: str) -> tuple:
 
     except Exception as e:
         raise ValueError(f"Failed to parse S3 URL {s3_url}: {str(e)}")
+
+def get_ku_documents_s3_url(key: str) -> str:
+    """Helper function to construct S3 URLs using the environment variable"""
+    return f"s3://{KU_DOCUMENTS_BUCKET}/{key}"
 
 def generate_rubric_with_bedrock(input_data: Dict[str, str]) -> Dict[str, Any]:
     """Call Bedrock to generate rubric using the prompt"""
