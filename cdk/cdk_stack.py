@@ -285,7 +285,7 @@ class KUEssayGradingStack(Stack):
             function_name="ku_rubric_generation_lambda",
             runtime=lambda_.Runtime.PYTHON_3_11,
             handler="lambda_function.lambda_handler",
-            code=lambda_.Code.from_asset("../lambda/rubric_generation"),  # Fixed path
+            code=lambda_.Code.from_asset("../backend/lambda/rubric_generation"),  # Fixed path
             timeout=Duration.seconds(self.config["timeout"]["ku_rubric_generation_lambda"]),
             memory_size=self.config["memory_size"]["ku_rubric_generation_lambda"],
             role=self.rubric_lambda_role,
@@ -303,7 +303,7 @@ class KUEssayGradingStack(Stack):
             function_name="ku_essay_grading_lambda",
             runtime=lambda_.Runtime.PYTHON_3_11,
             handler="lambda_function.lambda_handler",
-            code=lambda_.Code.from_asset("../lambda/essay_grading"),  # Fixed path
+            code=lambda_.Code.from_asset("../backend/lambda/essay_grading"),  # Fixed path
             timeout=Duration.seconds(self.config["timeout"]["ku_essay_grading_lambda"]),
             memory_size=self.config["memory_size"]["ku_essay_grading_lambda"],
             role=self.essay_grading_lambda_role,
