@@ -1,0 +1,94 @@
+.footer-container {
+  background-color: #ffffff;
+  border-top: 1px solid #e2e8f0;
+  padding: 48px 64px;
+  margin-top: auto;
+}
+
+.footer-content {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 48px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.feature-item {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.feature-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  background-color: #f8fafc;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.feature-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.feature-title {
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: #020617;
+  margin: 0 0 8px 0;
+  line-height: 1.4;
+}
+
+.feature-description {
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.5;
+  max-width: 200px;
+}
+
+/* Responsive design */
+@media (max-width: 1024px) {
+  .footer-container {
+    padding: 40px 32px;
+  }
+  
+  .footer-content {
+    gap: 32px;
+  }
+}
+
+@media (max-width: 768px) {
+  .footer-container {
+    padding: 32px 24px;
+  }
+  
+  .footer-content {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 32px;
+  }
+}
+
+@media (max-width: 480px) {
+  .footer-container {
+    padding: 24px 16px;
+  }
+  
+  .footer-content {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  
+  .feature-description {
+    max-width: 280px;
+  }
+}
