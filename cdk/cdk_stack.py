@@ -5,6 +5,9 @@ from aws_cdk import (
     aws_apigateway as apigateway,
     aws_iam as iam,
     aws_s3 as s3,
+    aws_cloudfront as cloudfront,
+    aws_cloudfront_origins as origins,
+    aws_s3_deployment as s3deploy,
     CfnOutput,
     RemovalPolicy,
     Duration,
@@ -27,6 +30,7 @@ class KUEssayGradingStack(Stack):
         # Create resources
         self.create_dynamodb_tables()
         self.create_s3_buckets()
+        self.create_frontend_infrastructure()
         self.create_iam_roles()
         self.create_lambda_functions()
         self.create_api_gateway()
@@ -76,6 +80,91 @@ class KUEssayGradingStack(Stack):
             public_read_access=False,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL
         )
+
+    def create_frontend_infrastructure(self):
+        """Create frontend hosting infrastructure with S3 and CloudFront"""
+        
+        # Frontend hosting bucket
+        self.frontend_bucket = s3.Bucket(
+            self, "KUFrontendBucket",
+            bucket_name=f"ku-essay-grading-frontend-{self.env_name}-{self.account}",
+            removal_policy=self.config["table_settings"]["removal_policy"],
+            auto_delete_objects=self.env_name != "prod",
+            versioned=self.env_name == "prod",
+            public_read_access=False,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            website_index_document="index.html",
+            website_error_document="index.html"  # SPA routing support
+        )
+
+        # Origin Access Identity for CloudFront
+        self.origin_access_identity = cloudfront.OriginAccessIdentity(
+            self, "KUFrontendOAI",
+            comment=f"OAI for KU Essay Grading Frontend - {self.env_name}"
+        )
+
+        # Grant CloudFront access to S3 bucket
+        self.frontend_bucket.grant_read(self.origin_access_identity)
+
+        # CloudFront distribution
+        self.cloudfront_distribution = cloudfront.Distribution(
+            self, "KUFrontendDistribution",
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=origins.S3Origin(
+                    self.frontend_bucket,
+                    origin_access_identity=self.origin_access_identity
+                ),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+                cached_methods=cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                compress=True
+            ),
+            additional_behaviors={
+                "/static/*": cloudfront.BehaviorOptions(
+                    origin=origins.S3Origin(
+                        self.frontend_bucket,
+                        origin_access_identity=self.origin_access_identity
+                    ),
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                    compress=True
+                )
+            },
+            default_root_object="index.html",
+            error_responses=[
+                cloudfront.ErrorResponse(
+                    http_status=404,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=Duration.minutes(5)
+                ),
+                cloudfront.ErrorResponse(
+                    http_status=403,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=Duration.minutes(5)
+                )
+            ],
+            price_class=self.config.get("cloudfront_settings", {}).get(
+                "price_class", 
+                cloudfront.PriceClass.PRICE_CLASS_100 if self.env_name != "prod" else cloudfront.PriceClass.PRICE_CLASS_ALL
+            ),
+            comment=f"KU Essay Grading Frontend Distribution - {self.env_name}"
+        )
+
+        # Deploy frontend files (if build directory exists)
+        frontend_build_path = "../frontend/build"
+        if os.path.exists(frontend_build_path):
+            self.frontend_deployment = s3deploy.BucketDeployment(
+                self, "KUFrontendDeployment",
+                sources=[s3deploy.Source.asset(frontend_build_path)],
+                destination_bucket=self.frontend_bucket,
+                distribution=self.cloudfront_distribution,
+                distribution_paths=["/*"],
+                memory_limit=512,
+                ephemeral_storage_size=512
+            )
 
     def create_iam_roles(self):
         """Create IAM roles for Lambda functions with complete permissions"""
@@ -470,4 +559,29 @@ class KUEssayGradingStack(Stack):
             self, "GenerateRubricEndpoint",
             value=f"{self.api.url}generate-rubric",
             description="Endpoint for generating rubrics"
+        )
+
+        # Frontend outputs
+        CfnOutput(
+            self, "FrontendBucketName",
+            value=self.frontend_bucket.bucket_name,
+            description="Name of the frontend hosting S3 bucket"
+        )
+
+        CfnOutput(
+            self, "CloudFrontDistributionId",
+            value=self.cloudfront_distribution.distribution_id,
+            description="CloudFront distribution ID"
+        )
+
+        CfnOutput(
+            self, "CloudFrontDomainName",
+            value=self.cloudfront_distribution.distribution_domain_name,
+            description="CloudFront distribution domain name"
+        )
+
+        CfnOutput(
+            self, "FrontendURL",
+            value=f"https://{self.cloudfront_distribution.distribution_domain_name}",
+            description="Frontend application URL"
         )

@@ -27,6 +27,10 @@ class EnvironmentConfig:
                 "model_id": "amazon.nova-pro-v1:0",
                 "max_tokens": 4096,
                 "temperature": 0.7,
+            },
+            "cloudfront_settings": {
+                "price_class": "PRICE_CLASS_100",
+                "enable_logging": True,
             }
         },
         "test": {
@@ -51,6 +55,10 @@ class EnvironmentConfig:
                 "model_id": "amazon.nova-pro-v1:0",
                 "max_tokens": 4096,
                 "temperature": 0.5,
+            },
+            "cloudfront_settings": {
+                "price_class": "PRICE_CLASS_100",
+                "enable_logging": True,
             }
         },
         "prod": {
@@ -75,6 +83,10 @@ class EnvironmentConfig:
                 "model_id": "amazon.nova-pro-v1:0",
                 "max_tokens": 4096,
                 "temperature": 0.3,
+            },
+            "cloudfront_settings": {
+                "price_class": "PRICE_CLASS_ALL",
+                "enable_logging": True,
             }
         }
     }
