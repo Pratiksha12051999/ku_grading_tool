@@ -19,6 +19,7 @@ __pycache__/
 # IDE files
 .vscode/
 .idea/
+.kiro/
 
 # OS files
 .DS_Store
