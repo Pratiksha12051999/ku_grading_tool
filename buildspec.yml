@@ -6,33 +6,102 @@ phases:
       python: 3.11
       nodejs: 18
     commands:
+      - echo "Installing dependencies"
       - npm install -g aws-cdk
+      - cd backend
       - python -m venv .venv
       - . .venv/bin/activate
-      - cd backend
       - python -m pip install --upgrade pip
-      - if [ -f "requirements.txt" ]; then pip install -r requirements.txt; else echo "requirements.txt not found in $(pwd)"; exit 1; fi
-
+      - pip install -r requirements.txt
+      - cd ..  # Return to root
 
   pre_build:
     commands:
       - echo "Pre-build phase started"
-      - cdk bootstrap --require-approval never --context account=${AWS_ACCOUNT} --context region=${AWS_REGION} --context profile=${AWS_PROFILE} || true
+      - cd backend  # Ensure we're in backend directory for CDK commands
+      - |
+        cdk bootstrap --require-approval never \
+          --context account=${AWS_ACCOUNT} \
+          --context region=${AWS_REGION} \
+          --context profile=${AWS_PROFILE} || true
+      - cd ..  # Return to root
 
   build:
     commands:
-      - if [ "$ACTION" = "destroy" ]; then cdk destroy --all --force --profile ${AWS_PROFILE} -c env=${ENVIRONMENT} -c account=${AWS_ACCOUNT} -c region=${AWS_REGION} -c profile=${AWS_PROFILE}; fi
-      - if [ "$ACTION" != "destroy" ]; then cdk synth --profile ${AWS_PROFILE} -c env=${ENVIRONMENT} -c account=${AWS_ACCOUNT} -c region=${AWS_REGION} -c profile=${AWS_PROFILE}; fi
-      - if [ "$ACTION" != "destroy" ]; then cdk deploy --all --require-approval never --profile ${AWS_PROFILE} -c env=${ENVIRONMENT} -c account=${AWS_ACCOUNT} -c region=${AWS_REGION} -c profile=${AWS_PROFILE}; fi
-      - if [ "$ACTION" != "destroy" ]; then cd ../frontend; fi
-      - if [ "$ACTION" != "destroy" ]; then API_URL=$(aws cloudformation describe-stacks --stack-name KUEssayGradingStack-${ENVIRONMENT} --region ${AWS_REGION} --profile ${AWS_PROFILE} --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' --output text 2>/dev/null || echo ""); fi
-      - if [ "$ACTION" != "destroy" ] && [ -n "$API_URL" ] && [ "$API_URL" != "None" ]; then BASE_API_URL=$(echo "$API_URL" | sed 's/\/$//'); echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env; echo "REACT_APP_API_URL=${BASE_API_URL}" >> .env; echo "REACT_APP_DEBUG=true" >> .env; echo "REACT_APP_LOG_LEVEL=info" >> .env; fi
-      - if [ "$ACTION" != "destroy" ]; then npm install; fi
-      - if [ "$ACTION" != "destroy" ]; then npm run build; fi
-      - if [ "$ACTION" != "destroy" ] && [ -f "build/index.html" ]; then FRONTEND_BUCKET=$(aws cloudformation describe-stacks --stack-name KUEssayGradingStack-${ENVIRONMENT} --region ${AWS_REGION} --profile ${AWS_PROFILE} --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' --output text 2>/dev/null || echo ""); fi
-      - if [ "$ACTION" != "destroy" ] && [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete --profile ${AWS_PROFILE}; fi
-      - if [ "$ACTION" != "destroy" ] && [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then DISTRIBUTION_ID=$(aws cloudformation describe-stacks --stack-name KUEssayGradingStack-${ENVIRONMENT} --region ${AWS_REGION} --profile ${AWS_PROFILE} --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' --output text 2>/dev/null || echo ""); fi
-      - if [ "$ACTION" != "destroy" ] && [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" --profile ${AWS_PROFILE}; fi
+      - echo "Build phase started"
+      - cd backend  # Ensure we're in backend directory
+      - |
+        if [ "$ACTION" = "destroy" ]; then
+          cdk destroy --all --force --profile ${AWS_PROFILE} \
+            -c env=${ENVIRONMENT} \
+            -c account=${AWS_ACCOUNT} \
+            -c region=${AWS_REGION} \
+            -c profile=${AWS_PROFILE}
+        else
+          cdk synth --profile ${AWS_PROFILE} \
+            -c env=${ENVIRONMENT} \
+            -c account=${AWS_ACCOUNT} \
+            -c region=${AWS_REGION} \
+            -c profile=${AWS_PROFILE}
+
+          cdk deploy --all --require-approval never --profile ${AWS_PROFILE} \
+            -c env=${ENVIRONMENT} \
+            -c account=${AWS_ACCOUNT} \
+            -c region=${AWS_REGION} \
+            -c profile=${AWS_PROFILE}
+        fi
+      - cd ..  # Return to root for frontend deployment
+
+      # Frontend deployment
+      - |
+        if [ "$ACTION" != "destroy" ]; then
+          cd frontend
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+            --region ${AWS_REGION} \
+            --profile ${AWS_PROFILE} \
+            --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+
+          if [ -n "$API_URL" ] && [ "$API_URL" != "None" ]; then
+            BASE_API_URL=$(echo "$API_URL" | sed 's/\/$//')
+            echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env
+            echo "REACT_APP_API_URL=${BASE_API_URL}" >> .env
+            echo "REACT_APP_DEBUG=true" >> .env
+            echo "REACT_APP_LOG_LEVEL=info" >> .env
+          fi
+
+          npm install
+          npm run build
+
+          if [ -f "build/index.html" ]; then
+            FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
+              --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+              --region ${AWS_REGION} \
+              --profile ${AWS_PROFILE} \
+              --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+              --output text 2>/dev/null || echo "")
+
+            if [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then
+              aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete --profile ${AWS_PROFILE}
+
+              DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+                --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+                --region ${AWS_REGION} \
+                --profile ${AWS_PROFILE} \
+                --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+                --output text 2>/dev/null || echo "")
+
+              if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
+                aws cloudfront create-invalidation \
+                  --distribution-id "$DISTRIBUTION_ID" \
+                  --paths "/*" \
+                  --profile ${AWS_PROFILE}
+              fi
+            fi
+          fi
+          cd ..  # Return to root
+        fi
 
   post_build:
     commands:
