@@ -8,6 +8,7 @@ phases:
     commands:
       - echo "Installing dependencies"
       - npm install -g aws-cdk
+      - apt-get update && apt-get install -y jq
       - echo "Installing Python dependencies"
       - cd backend
       - python -m pip install --upgrade pip
@@ -52,7 +53,8 @@ phases:
           cdk deploy --all --require-approval never \
             -c env=${ENVIRONMENT} \
             -c account=${AWS_ACCOUNT} \
-            -c region=${AWS_REGION} | tee cdk_output.txt
+            -c region=${AWS_REGION} \
+            --outputs-file cdk_output.json | tee deployment.log
         fi
       - echo "Returning to root directory"
       - cd $CODEBUILD_SRC_DIR
@@ -75,10 +77,10 @@ phases:
           fi
           
           # Extract values directly from CDK output file
-          API_URL=$(grep "APIGatewayURL" ../backend/cdk_output.txt | sed 's/.*= //' || echo "")
-          FRONTEND_BUCKET=$(grep "FrontendBucketName" ../backend/cdk_output.txt | sed 's/.*= //' || echo "")
-          DISTRIBUTION_ID=$(grep "CloudFrontDistributionId" ../backend/cdk_output.txt | sed 's/.*= //' || echo "")
-          
+          # Extract values using jq (you'll need to install jq in the install phase)
+          API_URL=$(cat cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].APIGatewayURL')
+          FRONTEND_BUCKET=$(cat cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].FrontendBucketName')
+          DISTRIBUTION_ID=$(cat cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].CloudFrontDistributionId')
           # If CDK output parsing failed, use known values from previous successful deployment
           if [ -z "$API_URL" ]; then
             echo "CDK output parsing failed, using fallback values..."
