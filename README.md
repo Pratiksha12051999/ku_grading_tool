@@ -95,6 +95,16 @@ Note: Ensure your AWS account/region supports Bedrock model access
    #Verify installation
    aws --version
 
+3. Install Postman for testing APIs:
+   - Visit https://www.postman.com/downloads/
+   - Download the macOS installer
+   - Drag the Postman app to your Applications folder
+   - Launch Postman
+   - Create a new request
+   - Send a POST request to any public API (e.g., https://api.github.com)
+   - Ensure you receive a successful response 
+
+
 ### Using AWS CodeBuild with Local Terminal
 
 ### Using Local Terminal for Deployment
@@ -133,7 +143,7 @@ Note: Ensure your AWS account/region supports Bedrock model access
    chmod +x deploy-ku-essay-grading.sh
    ./deploy-ku-essay-grading.sh
    ```
-   
+  
 ### Manual Deployment
 
 
@@ -153,11 +163,12 @@ Note: Ensure your AWS account/region supports Bedrock model access
 
 Run the configuration script to update the .env file for deploying the frontend.
    ```bash
+   cd ..
    chmod +x configure-frontend.sh
    ./configure-frontend.sh
    
+   cd frontend
    npm install
-   cd frontend/build
    npm run build
    ```
 
