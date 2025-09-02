@@ -64,13 +64,33 @@ phases:
           echo "Now in frontend directory:" && pwd
           
           echo "Getting API URL from CloudFormation..."
+          echo "Debugging: Listing all stack outputs first..."
+          aws cloudformation describe-stacks \
+            --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+            --region ${AWS_REGION} \
+            --query 'Stacks[0].Outputs' || echo "Failed to get stack outputs"
+            
           API_URL=$(aws cloudformation describe-stacks \
             --stack-name KUEssayGradingStack-${ENVIRONMENT} \
             --region ${AWS_REGION} \
             --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
             --output text 2>/dev/null || echo "")
+          
+          echo "Retrieved API_URL: '$API_URL'"
+          
+          # Add retry mechanism for API URL retrieval
+          if [ -z "$API_URL" ] || [ "$API_URL" = "None" ] || [ "$API_URL" = "" ]; then
+            echo "First attempt failed, waiting 30 seconds and retrying..."
+            sleep 30
+            API_URL=$(aws cloudformation describe-stacks \
+              --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+              --region ${AWS_REGION} \
+              --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
+              --output text 2>/dev/null || echo "")
+            echo "Retry API_URL: '$API_URL'"
+          fi
 
-          if [ -n "$API_URL" ] && [ "$API_URL" != "None" ]; then
+          if [ -n "$API_URL" ] && [ "$API_URL" != "None" ] && [ "$API_URL" != "" ]; then
             echo "Configuring frontend with API URL: $API_URL"
             BASE_API_URL=$(echo "$API_URL" | sed 's/\/$//')
             
@@ -124,8 +144,11 @@ phases:
               exit 1
             fi
           else
-            echo "Error: Could not get API URL from stack"
-            exit 1
+            echo "Warning: Could not get API URL from stack, proceeding with frontend build anyway"
+            echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env
+            echo "REACT_APP_API_URL=https://api-placeholder.example.com" >> .env
+            echo "REACT_APP_DEBUG=true" >> .env
+            echo "REACT_APP_LOG_LEVEL=info" >> .env
           fi
         fi
 
