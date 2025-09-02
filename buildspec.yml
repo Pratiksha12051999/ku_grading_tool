@@ -8,9 +8,9 @@ phases:
     commands:
       - echo "Installing AWS CDK CLI..."
       - npm install -g aws-cdk
-      - echo "Environment variables check:"
-      - echo "GITHUB_OWNER is: ${GITHUB_OWNER}"
-      - echo "GITHUB_REPO is: ${GITHUB_REPO}"
+      - echo "Environment variables check..."
+      - echo "GITHUB_OWNER is ${GITHUB_OWNER}"
+      - echo "GITHUB_REPO is ${GITHUB_REPO}"
       - cd backend
       - echo "Installing Python dependencies"
       - python -m pip install --upgrade pip
