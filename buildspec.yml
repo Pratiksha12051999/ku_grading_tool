@@ -63,24 +63,24 @@ phases:
         if [ "$ACTION" != "destroy" ]; then
           echo "CDK deployment completed. Starting frontend configuration and build..."
           
+          # In the build phase, when checking for CDK outputs
           echo "Extracting values from CDK output..."
           cd frontend
           
           # Debug: Check if output file exists and show its contents
           echo "Checking CDK output file..."
-          if [ -f "../backend/cdk_output.txt" ]; then
+          if [ -f "../backend/cdk_output.json" ]; then
             echo "CDK output file exists. Contents:"
-            cat ../backend/cdk_output.txt
+            cat ../backend/cdk_output.json
             echo "--- End of CDK output ---"
           else
             echo "CDK output file not found!"
           fi
           
-          # Extract values directly from CDK output file
-          # Extract values using jq (you'll need to install jq in the install phase)
-          API_URL=$(cat cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].APIGatewayURL')
-          FRONTEND_BUCKET=$(cat cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].FrontendBucketName')
-          DISTRIBUTION_ID=$(cat cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].CloudFrontDistributionId')
+          # Extract values using correct path to cdk_output.json
+          API_URL=$(cat ../backend/cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].APIGatewayURL')
+          FRONTEND_BUCKET=$(cat ../backend/cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].FrontendBucketName')
+          DISTRIBUTION_ID=$(cat ../backend/cdk_output.json | jq -r '.["KUEssayGradingStack-'${ENVIRONMENT}'"].CloudFrontDistributionId')
           # If CDK output parsing failed, use known values from previous successful deployment
           if [ -z "$API_URL" ]; then
             echo "CDK output parsing failed, using fallback values..."
