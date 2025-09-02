@@ -8,8 +8,7 @@ import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from urllib.parse import urlparse
-
-# Configure logging
+from PyPDF2 import PdfReader
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -167,8 +166,7 @@ def download_and_extract_pdf_text(s3_url: str) -> str:
 
         # Extract text from PDF using PyPDF2
         try:
-            import PyPDF2
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_content))
+            pdf_reader = PdfReader(io.BytesIO(pdf_content))
             text_content = ""
 
             for page in pdf_reader.pages:
@@ -177,18 +175,22 @@ def download_and_extract_pdf_text(s3_url: str) -> str:
             logger.info(f"Successfully extracted {len(text_content)} characters from PDF")
             return text_content.strip()
 
-        except ImportError:
-            # Fallback: Try to read as text (if PDF is text-based)
-            logger.warning("PyPDF2 not available, attempting to read PDF as plain text")
+        except Exception as pdf_error:  # Catch PDF processing errors, not ImportError
+            # Log the specific error for debugging
+            logger.warning(f"PyPDF2 processing failed: {str(pdf_error)}")
+            logger.warning("Attempting to read PDF as plain text")
+
             try:
                 text_content = pdf_content.decode('utf-8', errors='ignore')
                 return text_content.strip()
-            except Exception:
-                raise ValueError("Cannot process PDF file - PyPDF2 library required for PDF processing")
+            except Exception as fallback_error:
+                logger.error(f"Plain text fallback failed: {str(fallback_error)}")
+                raise ValueError(f"Cannot process PDF file: {str(pdf_error)}")
 
     except Exception as e:
         logger.error(f"Error processing PDF: {str(e)}")
         raise ValueError(f"Failed to process PDF from {s3_url}: {str(e)}")
+
 
 def download_and_format_csv_essays(s3_url: str) -> str:
     """Download CSV from S3 and format essay data"""

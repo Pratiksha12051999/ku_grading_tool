@@ -53,7 +53,10 @@ function GradingPage({ essayData, onComplete }) {
     setError(null);
     
     try {
-      const apiUrl = 'https://uoxnrkgick.execute-api.us-east-1.amazonaws.com/dev/grade-essay';
+      const API_BASE_URL = process.env.REACT_APP_API_URL;
+      const apiUrl = `${API_BASE_URL}/grade-essay`;
+
+      console.log('Using API URL from env:', apiUrl);
       
       let requestBody;
       

@@ -44,22 +44,15 @@ print_status "Starting frontend deployment for environment: $ENV"
 print_status "Using AWS profile: $PROFILE"
 print_status "Target region: $REGION"
 
-# Check if we're in the correct directory
-if [[ ! -f "package.json" ]] && [[ ! -d "frontend" ]]; then
-    print_error "Please run this script from the Main directory"
+# Check if we're in the correct directory (ku_grader_tool root)
+if [[ ! -d "frontend" ]] || [[ ! -d "backend" ]] || [[ ! -f "backend/cdk.json" ]]; then
+    print_error "Please run this script from the ku_grader_tool root directory"
+    print_error "Expected structure: frontend/, backend/, backend/cdk.json"
     exit 1
 fi
 
-# Navigate to project root if needed
-if [[ -f "package.json" ]] && [[ -d "frontend" ]]; then
-    PROJECT_ROOT="."
-elif [[ -f "../package.json" ]] && [[ -d "../frontend" ]]; then
-    PROJECT_ROOT=".."
-    cd ..
-else
-    print_error "Cannot find project structure. Ensure you're in the Main directory."
-    exit 1
-fi
+PROJECT_ROOT="."
+print_status "Found project structure in current directory"
 
 # Check prerequisites
 print_status "Checking prerequisites..."
@@ -117,21 +110,39 @@ fi
 
 print_success "Frontend build completed"
 
-# Navigate to CDK directory
-cd ../cdk
+# Navigate back to project root and then to backend directory
+cd ..
+
+# Navigate to backend directory (where cdk.json is located)
+cd backend
 
 # Install CDK dependencies
 print_status "Installing CDK dependencies..."
 if [[ -f "requirements.txt" ]]; then
+    # Check if virtual environment exists, if not create it
+    if [[ ! -d ".venv" ]]; then
+        print_status "Creating Python virtual environment..."
+        python3 -m venv .venv
+    fi
+
+    # Activate virtual environment and install dependencies
+    print_status "Activating virtual environment and installing dependencies..."
+    source .venv/bin/activate
     pip install -r requirements.txt
     print_success "CDK dependencies installed"
+else
+    print_warning "requirements.txt not found in backend directory"
 fi
 
 # Bootstrap CDK (if needed)
 print_status "Checking CDK bootstrap status..."
 if ! aws cloudformation describe-stacks --stack-name CDKToolkit --profile $PROFILE --region $REGION &> /dev/null; then
     print_warning "CDK not bootstrapped in this account/region. Bootstrapping now..."
-    cdk bootstrap --profile $PROFILE --region $REGION
+    cdk bootstrap --profile $PROFILE
+    if [[ $? -ne 0 ]]; then
+        print_error "CDK bootstrap failed. Please check your AWS credentials and permissions."
+        exit 1
+    fi
     print_success "CDK bootstrap completed"
 else
     print_status "CDK already bootstrapped"

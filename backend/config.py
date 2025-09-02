@@ -1,5 +1,5 @@
 # ku_essay_grading/config.py
-from aws_cdk import aws_dynamodb as dynamodb, aws_apigateway as apigateway, RemovalPolicy
+from aws_cdk import aws_dynamodb as dynamodb, aws_apigateway as apigateway, RemovalPolicy, aws_cloudfront as cloudfront
 
 class EnvironmentConfig:
     """Environment-specific configuration for KU Essay Grading Stack"""
@@ -29,8 +29,10 @@ class EnvironmentConfig:
                 "temperature": 0.7,
             },
             "cloudfront_settings": {
-                "price_class": "PRICE_CLASS_100",
-                "enable_logging": True,
+                "price_class": cloudfront.PriceClass.PRICE_CLASS_100,
+                "min_ttl": 0,
+                "default_ttl": 86400,  # 1 day
+                "max_ttl": 31536000,   # 1 year
             }
         },
         "test": {
@@ -57,8 +59,10 @@ class EnvironmentConfig:
                 "temperature": 0.5,
             },
             "cloudfront_settings": {
-                "price_class": "PRICE_CLASS_100",
-                "enable_logging": True,
+                "price_class": cloudfront.PriceClass.PRICE_CLASS_200,
+                "min_ttl": 0,
+                "default_ttl": 3600,   # 1 hour
+                "max_ttl": 86400,      # 1 day
             }
         },
         "prod": {
@@ -85,8 +89,10 @@ class EnvironmentConfig:
                 "temperature": 0.3,
             },
             "cloudfront_settings": {
-                "price_class": "PRICE_CLASS_ALL",
-                "enable_logging": True,
+                "price_class": cloudfront.PriceClass.PRICE_CLASS_ALL,
+                "min_ttl": 0,
+                "default_ttl": 86400,  # 1 day
+                "max_ttl": 31536000,   # 1 year
             }
         }
     }
