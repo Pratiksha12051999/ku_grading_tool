@@ -76,23 +76,19 @@ phases:
             echo "Found API URL: $BASE_API_URL"
             
             # Create .env file
-            cat > .env << EOF
-REACT_APP_ENVIRONMENT=${ENVIRONMENT}
-REACT_APP_REGION=${AWS_REGION}
-REACT_APP_API_URL=${BASE_API_URL}
-REACT_APP_DEBUG=true
-REACT_APP_LOG_LEVEL=info
-EOF
+            echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env
+            echo "REACT_APP_REGION=${AWS_REGION}" >> .env
+            echo "REACT_APP_API_URL=${BASE_API_URL}" >> .env
+            echo "REACT_APP_DEBUG=true" >> .env
+            echo "REACT_APP_LOG_LEVEL=info" >> .env
             echo "Created .env file with API URL"
           else
             echo "Warning: Could not get API URL, using placeholder"
-            cat > .env << EOF
-REACT_APP_ENVIRONMENT=${ENVIRONMENT}
-REACT_APP_REGION=${AWS_REGION}
-REACT_APP_API_URL=https://placeholder-api.com
-REACT_APP_DEBUG=true
-REACT_APP_LOG_LEVEL=info
-EOF
+            echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env
+            echo "REACT_APP_REGION=${AWS_REGION}" >> .env
+            echo "REACT_APP_API_URL=https://placeholder-api.com" >> .env
+            echo "REACT_APP_DEBUG=true" >> .env
+            echo "REACT_APP_LOG_LEVEL=info" >> .env
           fi
           
           echo "Installing frontend dependencies..."
