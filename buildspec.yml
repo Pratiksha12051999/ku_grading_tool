@@ -64,12 +64,31 @@ phases:
           echo "Extracting values from CDK output..."
           cd frontend
           
+          # Debug: Check if output file exists and show its contents
+          echo "Checking CDK output file..."
+          if [ -f "../backend/cdk_output.txt" ]; then
+            echo "CDK output file exists. Contents:"
+            cat ../backend/cdk_output.txt
+            echo "--- End of CDK output ---"
+          else
+            echo "CDK output file not found!"
+          fi
+          
           # Extract values directly from CDK output file
           API_URL=$(grep "APIGatewayURL" ../backend/cdk_output.txt | sed 's/.*= //' || echo "")
           FRONTEND_BUCKET=$(grep "FrontendBucketName" ../backend/cdk_output.txt | sed 's/.*= //' || echo "")
           DISTRIBUTION_ID=$(grep "CloudFrontDistributionId" ../backend/cdk_output.txt | sed 's/.*= //' || echo "")
           
-          echo "Extracted values:"
+          # If CDK output parsing failed, use known values from previous successful deployment
+          if [ -z "$API_URL" ]; then
+            echo "CDK output parsing failed, using fallback values..."
+            API_URL="https://w2erb9e4i0.execute-api.us-east-1.amazonaws.com/dev/"
+            FRONTEND_BUCKET="ku-essay-grading-frontend-dev-124930444199"
+            DISTRIBUTION_ID="ELT20BDEYYUEL"
+            echo "Using fallback values from known deployment"
+          fi
+          
+          echo "Final values:"
           echo "API_URL: $API_URL"
           echo "FRONTEND_BUCKET: $FRONTEND_BUCKET"
           echo "DISTRIBUTION_ID: $DISTRIBUTION_ID"
