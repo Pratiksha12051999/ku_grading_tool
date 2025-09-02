@@ -7,7 +7,6 @@ phases:
       nodejs: 18
     commands:
       - npm install -g aws-cdk
-      - cd backend
       - python -m venv .venv
       - . .venv/bin/activate
       - python -m pip install --upgrade pip
