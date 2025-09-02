@@ -8,8 +8,11 @@ phases:
     commands:
       - npm install -g aws-cdk
       - cd backend
+      - python -m venv .venv
+      - . .venv/bin/activate
       - python -m pip install --upgrade pip
-      - pip install -r requirements.txt
+      - if [ -f "requirements.txt" ]; then pip install -r requirements.txt; else echo "requirements.txt not found in $(pwd)"; exit 1; fi
+
 
   pre_build:
     commands:
