@@ -34,7 +34,27 @@ phases:
   post_build:
     commands:
       - echo "Post-build phase started"
-      - if [ "$ACTION" != "destroy" ]; then cd backend; STACK_NAME="KUEssayGradingStack-${ENVIRONMENT}"; API_URL=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME} --region ${AWS_REGION} --profile ${AWS_PROFILE} --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' --output text 2>/dev/null || echo "Not available"); FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME} --region ${AWS_REGION} --profile ${AWS_PROFILE} --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' --output text 2>/dev/null || echo "Not available"); echo "Deployment complete - Frontend: ${FRONTEND_URL}, API: ${API_URL}"; fi
+      - |
+        if [ "$ACTION" != "destroy" ]; then
+          cd backend
+          STACK_NAME="KUEssayGradingStack-${ENVIRONMENT}"
+          
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION} \
+            --profile ${AWS_PROFILE} \
+            --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
+            --output text 2>/dev/null || echo "Not available")
+            
+          FRONTEND_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION} \
+            --profile ${AWS_PROFILE} \
+            --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' \
+            --output text 2>/dev/null || echo "Not available")
+            
+          echo "Deployment complete - Frontend: ${FRONTEND_URL}, API: ${API_URL}"
+        fi
 
 artifacts:
   files:
