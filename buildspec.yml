@@ -7,53 +7,29 @@ phases:
       nodejs: 18
     commands:
       - echo "Installing dependencies"
-      - echo "Current directory: $(pwd)"
-      - ls -la
-      # Verify backend directory exists
-      - |
-        if [ ! -d "backend" ]; then
-          echo "Error: backend directory not found"
-          echo "Contents of current directory:"
-          ls -la
-          exit 1
-        fi
+      - npm install -g aws-cdk
       - cd backend
-      - echo "Backend directory contents:"
-      - ls -la
       - python -m venv .venv
       - . .venv/bin/activate
       - python -m pip install --upgrade pip
       - pip install -r requirements.txt
-      - pip install -e .
-      - cd ..
+#      - cd ..  # Return to root
 
   pre_build:
     commands:
       - echo "Pre-build phase started"
-      - echo "Current directory: $(pwd)"
-      - |
-        if [ ! -d "backend" ]; then
-          echo "Error: backend directory not found"
-          exit 1
-        fi
-      - cd backend
+#      - cd backend  # Ensure we're in backend directory for CDK commands
       - |
         cdk bootstrap --require-approval never \
           --context account=${AWS_ACCOUNT} \
           --context region=${AWS_REGION} \
           --context profile=${AWS_PROFILE} || true
-      - cd ..
+#      - cd ..  # Return to root
 
   build:
     commands:
       - echo "Build phase started"
-      - echo "Current directory: $(pwd)"
-      - |
-        if [ ! -d "backend" ]; then
-          echo "Error: backend directory not found"
-          exit 1
-        fi
-      - cd backend
+#      - cd backend  # Ensure we're in backend directory
       - |
         if [ "$ACTION" = "destroy" ]; then
           cdk destroy --all --force --profile ${AWS_PROFILE} \
@@ -74,24 +50,64 @@ phases:
             -c region=${AWS_REGION} \
             -c profile=${AWS_PROFILE}
         fi
-      - cd ..
+      - cd ..  # Return to root for frontend deployment
 
       # Frontend deployment
       - |
-        if [ "$ACTION" != "destroy" ] && [ -d "frontend" ]; then
+        if [ "$ACTION" != "destroy" ]; then
           cd frontend
-          echo "Frontend directory contents:"
-          ls -la
-          # Rest of frontend deployment...
-          cd ..
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+            --region ${AWS_REGION} \
+            --profile ${AWS_PROFILE} \
+            --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+
+          if [ -n "$API_URL" ] && [ "$API_URL" != "None" ]; then
+            BASE_API_URL=$(echo "$API_URL" | sed 's/\/$//')
+            echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env
+            echo "REACT_APP_API_URL=${BASE_API_URL}" >> .env
+            echo "REACT_APP_DEBUG=true" >> .env
+            echo "REACT_APP_LOG_LEVEL=info" >> .env
+          fi
+
+          npm install
+          npm run build
+
+          if [ -f "build/index.html" ]; then
+            FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
+              --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+              --region ${AWS_REGION} \
+              --profile ${AWS_PROFILE} \
+              --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+              --output text 2>/dev/null || echo "")
+
+            if [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then
+              aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete --profile ${AWS_PROFILE}
+
+              DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+                --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+                --region ${AWS_REGION} \
+                --profile ${AWS_PROFILE} \
+                --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+                --output text 2>/dev/null || echo "")
+
+              if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
+                aws cloudfront create-invalidation \
+                  --distribution-id "$DISTRIBUTION_ID" \
+                  --paths "/*" \
+                  --profile ${AWS_PROFILE}
+              fi
+            fi
+          fi
+          cd ..  # Return to root
         fi
 
   post_build:
     commands:
       - echo "Post-build phase started"
-      - echo "Current directory: $(pwd)"
       - |
-        if [ "$ACTION" != "destroy" ] && [ -d "backend" ]; then
+        if [ "$ACTION" != "destroy" ]; then
           cd backend
           STACK_NAME="KUEssayGradingStack-${ENVIRONMENT}"
           
@@ -110,12 +126,9 @@ phases:
             --output text 2>/dev/null || echo "Not available")
             
           echo "Deployment complete - Frontend: ${FRONTEND_URL}, API: ${API_URL}"
-        else
-          echo "Skipping post-build phase"
         fi
 
 artifacts:
   files:
     - '**/*'
-  base-directory: .
   name: ku-essay-grading-artifacts
