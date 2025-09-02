@@ -59,96 +59,60 @@ phases:
       - echo "Current directory after CDK:" && pwd
       - |
         if [ "$ACTION" != "destroy" ]; then
-          echo "CDK deployment completed. Starting frontend build..."
+          echo "CDK deployment completed. Starting frontend configuration and build..."
+          
+          echo "Running configure-frontend-env.sh script..."
+          chmod +x configure-frontend-env.sh
+          
+          # Run the script with environment, empty profile (for CodeBuild), and region
+          ./configure-frontend-env.sh "${ENVIRONMENT}" "" "${AWS_REGION}"
+          
+          echo "Frontend environment configured. Building React application..."
           cd frontend
-          echo "Now in frontend directory:" && pwd
           
-          echo "Getting API URL from CloudFormation..."
-          echo "Debugging: Listing all stack outputs first..."
-          aws cloudformation describe-stacks \
-            --stack-name KUEssayGradingStack-${ENVIRONMENT} \
-            --region ${AWS_REGION} \
-            --query 'Stacks[0].Outputs' || echo "Failed to get stack outputs"
+          echo "Installing frontend dependencies..."
+          npm install
+          
+          echo "Building React application..."
+          npm run build
+          
+          if [ -f "build/index.html" ]; then
+            echo "Frontend build successful. Getting S3 bucket name..."
             
-          API_URL=$(aws cloudformation describe-stacks \
-            --stack-name KUEssayGradingStack-${ENVIRONMENT} \
-            --region ${AWS_REGION} \
-            --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
-            --output text 2>/dev/null || echo "")
-          
-          echo "Retrieved API_URL: '$API_URL'"
-          
-          # Add retry mechanism for API URL retrieval
-          if [ -z "$API_URL" ] || [ "$API_URL" = "None" ] || [ "$API_URL" = "" ]; then
-            echo "First attempt failed, waiting 30 seconds and retrying..."
-            sleep 30
-            API_URL=$(aws cloudformation describe-stacks \
+            FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
               --stack-name KUEssayGradingStack-${ENVIRONMENT} \
               --region ${AWS_REGION} \
-              --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
+              --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
               --output text 2>/dev/null || echo "")
-            echo "Retry API_URL: '$API_URL'"
-          fi
 
-          if [ -n "$API_URL" ] && [ "$API_URL" != "None" ] && [ "$API_URL" != "" ]; then
-            echo "Configuring frontend with API URL: $API_URL"
-            BASE_API_URL=$(echo "$API_URL" | sed 's/\/$//')
-            
-            echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env
-            echo "REACT_APP_API_URL=${BASE_API_URL}" >> .env
-            echo "REACT_APP_DEBUG=true" >> .env
-            echo "REACT_APP_LOG_LEVEL=info" >> .env
-            
-            echo "Installing frontend dependencies..."
-            npm install
-            
-            echo "Building React application..."
-            npm run build
-            
-            if [ -f "build/index.html" ]; then
-              echo "Frontend build successful. Getting S3 bucket name..."
-              
-              FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
+            if [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then
+              echo "Uploading frontend to S3: $FRONTEND_BUCKET"
+              aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete
+
+              echo "Creating CloudFront invalidation..."
+              DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
                 --stack-name KUEssayGradingStack-${ENVIRONMENT} \
                 --region ${AWS_REGION} \
-                --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+                --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
                 --output text 2>/dev/null || echo "")
 
-              if [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then
-                echo "Uploading frontend to S3: $FRONTEND_BUCKET"
-                aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete
-
-                echo "Creating CloudFront invalidation..."
-                DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
-                  --stack-name KUEssayGradingStack-${ENVIRONMENT} \
-                  --region ${AWS_REGION} \
-                  --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
-                  --output text 2>/dev/null || echo "")
-
-                if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
-                  aws cloudfront create-invalidation \
-                    --distribution-id "$DISTRIBUTION_ID" \
-                    --paths "/*" > /dev/null
-                  echo "CloudFront invalidation created"
-                else
-                  echo "Warning: Could not create CloudFront invalidation"
-                fi
-                
-                echo "Frontend deployment completed"
+              if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
+                aws cloudfront create-invalidation \
+                  --distribution-id "$DISTRIBUTION_ID" \
+                  --paths "/*" > /dev/null
+                echo "CloudFront invalidation created"
               else
-                echo "Error: Could not get frontend bucket name"
-                exit 1
+                echo "Warning: Could not create CloudFront invalidation"
               fi
+              
+              echo "Frontend deployment completed successfully"
             else
-              echo "Error: Frontend build failed"
+              echo "Error: Could not get frontend bucket name"
               exit 1
             fi
           else
-            echo "Warning: Could not get API URL from stack, proceeding with frontend build anyway"
-            echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env
-            echo "REACT_APP_API_URL=https://api-placeholder.example.com" >> .env
-            echo "REACT_APP_DEBUG=true" >> .env
-            echo "REACT_APP_LOG_LEVEL=info" >> .env
+            echo "Error: Frontend build failed - build/index.html not found"
+            exit 1
           fi
         fi
 
