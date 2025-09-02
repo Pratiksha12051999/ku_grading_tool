@@ -8,99 +8,118 @@ phases:
     commands:
       - echo "Installing dependencies"
       - npm install -g aws-cdk
+      - echo "Installing Python dependencies"
       - cd backend
-      - python -m venv .venv
-      - . .venv/bin/activate
       - python -m pip install --upgrade pip
       - pip install -r requirements.txt
-#      - cd ..  # Return to root
 
   pre_build:
     commands:
       - echo "Pre-build phase started"
-#      - cd backend  # Ensure we're in backend directory for CDK commands
+      - echo "Environment variables:"
+      - echo "AWS_ACCOUNT: $AWS_ACCOUNT"
+      - echo "AWS_REGION: $AWS_REGION"
+      - echo "ENVIRONMENT: $ENVIRONMENT"
+      - cd backend
+      - echo "CDK Bootstrap check..."
       - |
         cdk bootstrap --require-approval never \
           --context account=${AWS_ACCOUNT} \
-          --context region=${AWS_REGION} \
-          --context profile=${AWS_PROFILE} || true
-#      - cd ..  # Return to root
+          --context region=${AWS_REGION} || true
 
   build:
     commands:
       - echo "Build phase started"
-#      - cd backend  # Ensure we're in backend directory
+      - cd backend
       - |
         if [ "$ACTION" = "destroy" ]; then
-          cdk destroy --all --force --profile ${AWS_PROFILE} \
+          echo "Destroying CDK stacks..."
+          cdk destroy --all --force \
             -c env=${ENVIRONMENT} \
             -c account=${AWS_ACCOUNT} \
-            -c region=${AWS_REGION} \
-            -c profile=${AWS_PROFILE}
+            -c region=${AWS_REGION}
         else
-          cdk synth --profile ${AWS_PROFILE} \
+          echo "Synthesizing CDK stack..."
+          cdk synth \
             -c env=${ENVIRONMENT} \
             -c account=${AWS_ACCOUNT} \
-            -c region=${AWS_REGION} \
-            -c profile=${AWS_PROFILE}
+            -c region=${AWS_REGION}
 
-          cdk deploy --all --require-approval never --profile ${AWS_PROFILE} \
+          echo "Deploying CDK stack..."
+          cdk deploy --all --require-approval never \
             -c env=${ENVIRONMENT} \
             -c account=${AWS_ACCOUNT} \
-            -c region=${AWS_REGION} \
-            -c profile=${AWS_PROFILE}
-        fi
-      - cd ..  # Return to root for frontend deployment
-
-      # Frontend deployment
-      - |
-        if [ "$ACTION" != "destroy" ]; then
-          cd frontend
+            -c region=${AWS_REGION}
+          
+          echo "CDK deployment completed. Starting frontend build..."
+          cd ../frontend
+          
+          echo "Getting API URL from CloudFormation..."
           API_URL=$(aws cloudformation describe-stacks \
             --stack-name KUEssayGradingStack-${ENVIRONMENT} \
             --region ${AWS_REGION} \
-            --profile ${AWS_PROFILE} \
             --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
             --output text 2>/dev/null || echo "")
 
           if [ -n "$API_URL" ] && [ "$API_URL" != "None" ]; then
+            echo "Configuring frontend with API URL: $API_URL"
             BASE_API_URL=$(echo "$API_URL" | sed 's/\/$//')
-            echo "REACT_APP_ENVIRONMENT=${ENVIRONMENT}" > .env
-            echo "REACT_APP_API_URL=${BASE_API_URL}" >> .env
-            echo "REACT_APP_DEBUG=true" >> .env
-            echo "REACT_APP_LOG_LEVEL=info" >> .env
-          fi
-
-          npm install
-          npm run build
-
-          if [ -f "build/index.html" ]; then
-            FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
-              --stack-name KUEssayGradingStack-${ENVIRONMENT} \
-              --region ${AWS_REGION} \
-              --profile ${AWS_PROFILE} \
-              --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
-              --output text 2>/dev/null || echo "")
-
-            if [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then
-              aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete --profile ${AWS_PROFILE}
-
-              DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            
+            cat > .env << EOF
+        REACT_APP_ENVIRONMENT=${ENVIRONMENT}
+        REACT_APP_API_URL=${BASE_API_URL}
+        REACT_APP_DEBUG=true
+        REACT_APP_LOG_LEVEL=info
+        EOF
+            
+            echo "Installing frontend dependencies..."
+            npm install
+            
+            echo "Building React application..."
+            npm run build
+            
+            if [ -f "build/index.html" ]; then
+              echo "Frontend build successful. Getting S3 bucket name..."
+              
+              FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
                 --stack-name KUEssayGradingStack-${ENVIRONMENT} \
                 --region ${AWS_REGION} \
-                --profile ${AWS_PROFILE} \
-                --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+                --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
                 --output text 2>/dev/null || echo "")
 
-              if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
-                aws cloudfront create-invalidation \
-                  --distribution-id "$DISTRIBUTION_ID" \
-                  --paths "/*" \
-                  --profile ${AWS_PROFILE}
+              if [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then
+                echo "Uploading frontend to S3: $FRONTEND_BUCKET"
+                aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete
+
+                echo "Creating CloudFront invalidation..."
+                DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+                  --stack-name KUEssayGradingStack-${ENVIRONMENT} \
+                  --region ${AWS_REGION} \
+                  --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+                  --output text 2>/dev/null || echo "")
+
+                if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
+                  aws cloudfront create-invalidation \
+                    --distribution-id "$DISTRIBUTION_ID" \
+                    --paths "/*" > /dev/null
+                  echo "CloudFront invalidation created"
+                else
+                  echo "Warning: Could not create CloudFront invalidation"
+                fi
+                
+                echo "Frontend deployment completed"
+              else
+                echo "Error: Could not get frontend bucket name"
+                exit 1
               fi
+            else
+              echo "Error: Frontend build failed"
+              exit 1
             fi
+          else
+            echo "Error: Could not get API URL from stack"
+            exit 1
           fi
-          cd ..  # Return to root
         fi
 
   post_build:
@@ -108,25 +127,32 @@ phases:
       - echo "Post-build phase started"
       - |
         if [ "$ACTION" != "destroy" ]; then
-          cd backend
+          echo "Getting deployment summary..."
+          
           STACK_NAME="KUEssayGradingStack-${ENVIRONMENT}"
           
           API_URL=$(aws cloudformation describe-stacks \
             --stack-name ${STACK_NAME} \
             --region ${AWS_REGION} \
-            --profile ${AWS_PROFILE} \
             --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
             --output text 2>/dev/null || echo "Not available")
             
           FRONTEND_URL=$(aws cloudformation describe-stacks \
             --stack-name ${STACK_NAME} \
             --region ${AWS_REGION} \
-            --profile ${AWS_PROFILE} \
             --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' \
             --output text 2>/dev/null || echo "Not available")
             
-          echo "Deployment complete - Frontend: ${FRONTEND_URL}, API: ${API_URL}"
+          echo "=========================================="
+          echo "DEPLOYMENT COMPLETED SUCCESSFULLY!"
+          echo "=========================================="
+          echo "Frontend Application: ${FRONTEND_URL}"
+          echo "API Gateway: ${API_URL}"
+          echo "Grade Essay Endpoint: ${API_URL}grade-essay"
+          echo "Generate Rubric Endpoint: ${API_URL}generate-rubric"
+          echo "=========================================="
         fi
+      - echo "CDK $ACTION complete."
 
 artifacts:
   files:
