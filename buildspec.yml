@@ -1,0 +1,171 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+      nodejs: 18
+    commands:
+      - echo "Installing AWS CDK CLI..."
+      - npm install -g aws-cdk
+      - echo "Environment variables check:"
+      - echo "GITHUB_OWNER is: $GITHUB_OWNER"
+      - echo "GITHUB_REPO is: $GITHUB_REPO"
+      - echo "Changing into backend directory"
+      - cd backend
+      - echo "Installing Python dependencies"
+      - python -m pip install --upgrade pip
+      - pip install -r requirements.txt
+
+  pre_build:
+    commands:
+      - echo "Pre-build phase started"
+      - echo "Environment variables:"
+      - echo "AWS_PROFILE is: $AWS_PROFILE"
+      - echo "ENVIRONMENT is: $ENVIRONMENT"
+      - echo "AWS_REGION is: $AWS_REGION"
+      - echo "AWS_ACCOUNT is: $AWS_ACCOUNT"
+      - echo "Bootstrapping CDK (no approval)..."
+      - >-
+        cdk bootstrap --require-approval never
+        --context account=$AWS_ACCOUNT
+        --context region=$AWS_REGION
+        --context profile=$AWS_PROFILE || true
+
+  build:
+    commands:
+      - >-
+        if [ "$ACTION" = "destroy" ]; then
+          echo "Destroying all CDK stacks...";
+          cdk destroy --all --force \
+            --profile $AWS_PROFILE \
+            -c env=$ENVIRONMENT \
+            -c account=$AWS_ACCOUNT \
+            -c region=$AWS_REGION \
+            -c profile=$AWS_PROFILE;
+        else
+          echo "Deploying backend CDK stacks...";
+          cdk synth \
+            --profile $AWS_PROFILE \
+            -c env=$ENVIRONMENT \
+            -c account=$AWS_ACCOUNT \
+            -c region=$AWS_REGION \
+            -c profile=$AWS_PROFILE;
+          cdk deploy --all --require-approval never \
+            --profile $AWS_PROFILE \
+            -c env=$ENVIRONMENT \
+            -c account=$AWS_ACCOUNT \
+            -c region=$AWS_REGION \
+            -c profile=$AWS_PROFILE;
+          
+          echo "Backend deployment completed. Building frontend...";
+          cd ../frontend;
+          
+          echo "Getting API URL from CloudFormation stack...";
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name KUEssayGradingStack-$ENVIRONMENT \
+            --region $AWS_REGION \
+            --profile $AWS_PROFILE \
+            --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
+            --output text 2>/dev/null || echo "");
+          
+          if [ -n "$API_URL" ] && [ "$API_URL" != "None" ]; then
+            echo "Configuring frontend with API URL: $API_URL";
+            BASE_API_URL=$(echo "$API_URL" | sed 's/\/$/');
+            cat > .env << EOF
+        REACT_APP_ENVIRONMENT=$ENVIRONMENT
+        REACT_APP_API_URL=$BASE_API_URL
+        REACT_APP_DEBUG=true
+        REACT_APP_LOG_LEVEL=info
+        EOF
+            
+            echo "Installing frontend dependencies...";
+            npm install;
+            
+            echo "Building React application...";
+            npm run build;
+            
+            if [ -f "build/index.html" ]; then
+              echo "Frontend build completed successfully";
+              
+              echo "Getting S3 frontend bucket name...";
+              FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
+                --stack-name KUEssayGradingStack-$ENVIRONMENT \
+                --region $AWS_REGION \
+                --profile $AWS_PROFILE \
+                --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+                --output text 2>/dev/null || echo "");
+              
+              if [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then
+                echo "Deploying frontend to S3 bucket: $FRONTEND_BUCKET";
+                aws s3 sync build/ "s3://$FRONTEND_BUCKET" --delete --profile $AWS_PROFILE;
+                
+                echo "Creating CloudFront invalidation...";
+                DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+                  --stack-name KUEssayGradingStack-$ENVIRONMENT \
+                  --region $AWS_REGION \
+                  --profile $AWS_PROFILE \
+                  --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+                  --output text 2>/dev/null || echo "");
+                
+                if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
+                  aws cloudfront create-invalidation \
+                    --distribution-id "$DISTRIBUTION_ID" \
+                    --paths "/*" \
+                    --profile $AWS_PROFILE >/dev/null;
+                  echo "CloudFront invalidation created";
+                fi;
+                
+                echo "Frontend deployment completed";
+              else
+                echo "Warning: Could not get frontend bucket name from stack outputs";
+              fi;
+            else
+              echo "Error: Frontend build failed - no build/index.html found";
+              exit 1;
+            fi;
+          else
+            echo "Error: Could not get API URL from stack outputs";
+            exit 1;
+          fi;
+        fi
+
+  post_build:
+    commands:
+      - echo "Post-build phase started"
+      - >-
+        if [ "$ACTION" != "destroy" ]; then
+          echo "Getting final deployment summary...";
+          cd backend;
+          
+          STACK_NAME="KUEssayGradingStack-$ENVIRONMENT";
+          
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --region $AWS_REGION \
+            --profile $AWS_PROFILE \
+            --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
+            --output text 2>/dev/null || echo "Not available");
+          
+          FRONTEND_URL=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --region $AWS_REGION \
+            --profile $AWS_PROFILE \
+            --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' \
+            --output text 2>/dev/null || echo "Not available");
+          
+          echo "========================================";
+          echo "DEPLOYMENT COMPLETED SUCCESSFULLY!";
+          echo "========================================";
+          echo "Frontend Application: $FRONTEND_URL";
+          echo "API Gateway: $API_URL";
+          echo "Grade Essay Endpoint: ${API_URL}grade-essay";
+          echo "Generate Rubric Endpoint: ${API_URL}generate-rubric";
+          echo "========================================";
+        fi
+      - echo "CDK $ACTION complete."
+
+artifacts:
+  files:
+    - '**/*'
+  name: ku-essay-grading-artifacts
