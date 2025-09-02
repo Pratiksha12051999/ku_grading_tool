@@ -12,7 +12,11 @@ ENV_FILE="$FRONTEND_DIR/.env"
 
 # Default values (can be overridden with command line args)
 ENVIRONMENT=${1:-"dev"}
-PROFILE=${2:-"KUDeveloper"}
+if [ "$2" = "" ] && [ -n "$CODEBUILD_SRC_DIR" ]; then
+    PROFILE=""  # CodeBuild environment, use IAM role
+else
+    PROFILE=${2:-"KUDeveloper"}  # Local environment, use profile
+fi
 REGION=${3:-"us-east-1"}
 STACK_NAME="KUEssayGradingStack-$ENVIRONMENT"
 
