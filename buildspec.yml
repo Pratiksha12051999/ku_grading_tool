@@ -12,6 +12,7 @@ phases:
       - cd backend
       - python -m pip install --upgrade pip
       - pip install -r requirements.txt
+      - cd $CODEBUILD_SRC_DIR
 
   pre_build:
     commands:
@@ -23,8 +24,9 @@ phases:
       - echo "Current directory:" && pwd
       - echo "Contents:" && ls -la
       - cd backend
-      - echo "CDK Bootstrap check..."
+      - echo "Now in backend directory for CDK bootstrap"
       - cdk bootstrap --require-approval never --context account=${AWS_ACCOUNT} --context region=${AWS_REGION} || true
+      - cd $CODEBUILD_SRC_DIR
 
   build:
     commands:
