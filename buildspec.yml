@@ -124,13 +124,17 @@ phases:
             
             if [ -n "$FRONTEND_BUCKET" ] && [ "$FRONTEND_BUCKET" != "None" ]; then
               echo "Uploading frontend to S3: $FRONTEND_BUCKET"
-              aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete
+              # Explicitly set AWS environment to use CodeBuild role, not profiles
+              unset AWS_PROFILE
+              export AWS_DEFAULT_REGION=${AWS_REGION}
+              aws s3 sync build/ "s3://${FRONTEND_BUCKET}" --delete --no-cli-pager
               
               if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
                 echo "Creating CloudFront invalidation..."
                 aws cloudfront create-invalidation \
                   --distribution-id "$DISTRIBUTION_ID" \
-                  --paths "/*" > /dev/null
+                  --paths "/*" \
+                  --no-cli-pager > /dev/null
                 echo "CloudFront invalidation created"
               else
                 echo "Warning: Could not get CloudFront distribution ID"
