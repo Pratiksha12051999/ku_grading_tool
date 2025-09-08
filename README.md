@@ -169,8 +169,6 @@ Note: Ensure your AWS account/region supports Bedrock model access
    ```bash
    git clone https://github.com/YOUR-USERNAME/ku_grading_tool
    cd ku_grading_tool
-   
-   
    cd backend
 
    # Step 1: Create and activate virtual environment
