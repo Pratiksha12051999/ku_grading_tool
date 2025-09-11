@@ -237,3 +237,4 @@ Note: Ensure your AWS account/region supports Bedrock model access
 4. Now Upload this sample json file to the frontend application to grade essays. 
 
    Sample JSON file : https://drive.google.com/file/d/1sLRZEm_6zgWSqbZh108xse4de9E8p0VR/view?usp=drive_link
+ 
