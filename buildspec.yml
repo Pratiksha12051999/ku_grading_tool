@@ -27,6 +27,12 @@ phases:
       - echo "Contents:" && ls -la
       - cd backend
       - echo "Now in backend directory for CDK bootstrap"
+      - echo "Setting up Lambda layers before CDK operations..."
+      - cd lambdas/layers/rubric_gen_layer
+      - pip install -r ../../rubric_generation/requirements.txt -t python/
+      - cd ../../../
+      - echo "Lambda layers setup completed"
+
       - |
         if [ "$ACTION" != "destroy" ]; then
           echo "Bootstrapping CDK (skipped for destroy operations)..."
@@ -91,11 +97,6 @@ phases:
           echo "=========================================="
           echo "STARTING DEPLOYMENT PROCESS"
           echo "=========================================="
-          
-          echo "Setting up Lambda layers..."
-          cd lambdas/layers/rubric_gen_layer
-          pip install -r ../../rubric_generation/requirements.txt -t python/
-          cd ../../../
           
           echo "Synthesizing CDK stack..."
           cdk synth \
