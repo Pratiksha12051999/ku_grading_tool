@@ -58,7 +58,6 @@ phases:
     commands:
       - echo "Build phase started"
       - echo "Current directory:" && pwd
-      - cd backend
       - echo "Now in backend directory:" && pwd
       - |
         if [ "$ACTION" = "destroy" ]; then
